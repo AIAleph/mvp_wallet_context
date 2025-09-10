@@ -13,6 +13,7 @@ Usage:
 Notes:
 - Idempotency is best-effort: labels are created if missing; issues are created without dedup checks (avoid re-running or use --dry-run).
 """
+
 import argparse
 import json
 import subprocess
@@ -21,10 +22,8 @@ from pathlib import Path
 from typing import Optional
 
 
-
 def run(cmd, check=True):
     return subprocess.run(cmd, check=check, text=True, capture_output=True)
-
 
 
 def gh_exists():
@@ -33,7 +32,6 @@ def gh_exists():
         return True
     except Exception:
         return False
-
 
 
 def ensure_label(
@@ -66,7 +64,6 @@ def ensure_label(
     run(cmd, check=True)
 
 
-
 def create_issue(
     title: str,
     body: str,
@@ -94,16 +91,25 @@ def create_issue(
     run(cmd, check=True)
 
 
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", help="Target GitHub repo OWNER/NAME", default=None)
-    parser.add_argument("--dry-run", action="store_true", help="Print gh commands without executing")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print gh commands without executing",
+    )
     args = parser.parse_args()
     dry_run = args.dry_run
     repo = args.repo
     if not gh_exists():
-        print("Error: gh CLI not found. Install from https://cli.github.com and run 'gh auth login'.", file=sys.stderr)
+        print(
+            (
+                "Error: gh CLI not found. Install from https://cli.github.com and "
+                "run 'gh auth login'."
+            ),
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     issues_path = Path("tools/issues.json")

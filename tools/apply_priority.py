@@ -6,10 +6,8 @@ import sys
 from typing import Dict, Tuple, Optional
 
 
-
 def run(cmd, check=True):
     return subprocess.run(cmd, check=check, text=True, capture_output=True)
-
 
 
 def gh_exists():
@@ -20,10 +18,7 @@ def gh_exists():
         return False
 
 
-
-def ensure_label(
-    name: str, color: str, description: str, repo: Optional[str] = None
-):
+def ensure_label(name: str, color: str, description: str, repo: Optional[str] = None):
     base = ["gh"]
     if repo:
         base += ["--repo", repo]
@@ -48,7 +43,6 @@ def ensure_label(
     if res.returncode != 0:
         # Non-fatal: might lack permission; adding labels to issues may still work or fail gracefully.
         sys.stderr.write(f"Warning: failed to create label '{name}': {res.stderr}\n")
-
 
 
 def ensure_milestone(title: str, description: str, repo: str) -> int:
@@ -99,7 +93,6 @@ def ensure_milestone(title: str, description: str, repo: str) -> int:
         raise
 
 
-
 def get_issue_map(repo: str) -> Dict[str, int]:
     res = run(
         [
@@ -118,7 +111,6 @@ def get_issue_map(repo: str) -> Dict[str, int]:
     )
     data = json.loads(res.stdout)
     return {item["title"]: item["number"] for item in data}
-
 
 
 def apply_issue(repo: str, number: int, priority: str, milestone_title: str):
@@ -182,7 +174,6 @@ def apply_issue(repo: str, number: int, priority: str, milestone_title: str):
     run(patch_cmd)
 
 
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True, help="OWNER/REPO")
@@ -190,7 +181,9 @@ def main():
     repo = args.repo
 
     if not gh_exists():
-        print("Error: gh CLI not found. Install and run 'gh auth login'.", file=sys.stderr)
+        print(
+            "Error: gh CLI not found. Install and run 'gh auth login'.", file=sys.stderr
+        )
         sys.exit(1)
 
     # Ensure priority labels
@@ -199,10 +192,29 @@ def main():
     ensure_label("P2", "fbca04", "Beta/optional", repo)
 
     # Ensure milestones
-    ensure_milestone("M0 Setup & Schema", "Scaffold, config, docker, ClickHouse schema, Makefile", repo)
-    ensure_milestone("M1 Ingestion Core", "Provider client, cursors, fetchers, normalization, decoders, idempotency, reorgs", repo)
-    ensure_milestone("M2 Enrichment + API", "EOA/contract, ERC-165, labels, summary + lists API, counters", repo)
-    ensure_milestone("M3 Semantic Search (beta)", "Embeddings pipeline, ANN queries, /search API", repo)
+    ensure_milestone(
+        "M0 Setup & Schema",
+        "Scaffold, config, docker, ClickHouse schema, Makefile",
+        repo,
+    )
+    ensure_milestone(
+        "M1 Ingestion Core",
+        (
+            "Provider client, cursors, fetchers, normalization, decoders, "
+            "idempotency, reorgs"
+        ),
+        repo,
+    )
+    ensure_milestone(
+        "M2 Enrichment + API",
+        ("EOA/contract, ERC-165, labels, summary + lists API, " "counters"),
+        repo,
+    )
+    ensure_milestone(
+        "M3 Semantic Search (beta)",
+        "Embeddings pipeline, ANN queries, /search API",
+        repo,
+    )
 
     # Map titles to (priority, milestone_title)
     P0_M0 = [
