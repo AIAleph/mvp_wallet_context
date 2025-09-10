@@ -19,6 +19,10 @@ var (
     version = "dev"
     // exit is aliased to os.Exit to allow overriding in tests.
     exit = os.Exit
+    // newIngest constructs the ingester. It is a var to allow tests to inject stubs.
+    newIngest = func(address string, opts ingest.Options) interface{ Backfill(context.Context) error; Delta(context.Context) error } {
+        return ingest.New(address, opts)
+    }
 )
 
 // env gets an environment variable or returns a fallback.
@@ -169,7 +173,7 @@ func main() {
     ctx, cancel := context.WithTimeout(context.Background(), timeout)
     defer cancel()
 
-    ing := ingest.New(address, opts)
+    ing := newIngest(address, opts)
     var err error
     switch mode {
     case "backfill":

@@ -2,12 +2,16 @@ package main
 
 import (
     "bytes"
+    "errors"
+    "context"
     "flag"
     "os"
     "regexp"
     "strings"
     "testing"
     "time"
+    
+    "github.com/AIAleph/mvp_wallet_context/internal/ingest"
 )
 
 // exitPanic is used to intercept exit calls in tests.
@@ -33,14 +37,16 @@ func captureStd(t *testing.T, fn func()) (stdout, stderr string) {
     defer func() {
         os.Stdout, os.Stderr = oldOut, oldErr
     }()
-    done := make(chan struct{})
+    doneOut := make(chan struct{})
+    doneErr := make(chan struct{})
     var outBuf, errBuf bytes.Buffer
-    go func() { _, _ = outBuf.ReadFrom(rOut); close(done) }()
-    go func() { _, _ = errBuf.ReadFrom(rErr) }()
+    go func() { _, _ = outBuf.ReadFrom(rOut); close(doneOut) }()
+    go func() { _, _ = errBuf.ReadFrom(rErr); close(doneErr) }()
     fn()
     _ = wOut.Close()
     _ = wErr.Close()
-    <-done
+    <-doneOut
+    <-doneErr
     return outBuf.String(), errBuf.String()
 }
 
@@ -296,3 +302,49 @@ func TestMain_DeltaOK(t *testing.T) {
         }
     })
 }
+
+func TestMain_IngestionError(t *testing.T) {
+    withFreshFlags(t, func() {
+        addr := "0x" + strings.Repeat("a", 40)
+        oldArgs := os.Args
+        os.Args = []string{"ingester", "--address", addr, "--mode", "backfill"}
+        defer func() { os.Args = oldArgs }()
+
+        // Stub ingester to return an error from Backfill
+        oldNew := newIngest
+        defer func() { newIngest = oldNew }()
+        newIngest = func(address string, opts ingest.Options) interface{ Backfill(context.Context) error; Delta(context.Context) error } {
+            return stubRunner{backfillErr: errors.New("boom")}
+        }
+
+        // Intercept exit(1)
+        oldExit := exit
+        defer func() { exit = oldExit }()
+        exit = func(code int) { panic(exitPanic{code}) }
+
+        _, errOut := captureStd(t, func() {
+            defer func() {
+                if r := recover(); r != nil {
+                    if ep, ok := r.(exitPanic); ok {
+                        if ep.code != 1 {
+                            t.Fatalf("exit code %d, want 1", ep.code)
+                        }
+                        return
+                    }
+                    panic(r)
+                }
+                t.Fatalf("expected exit panic")
+            }()
+            main()
+        })
+        if !strings.Contains(errOut, "ingestion error: boom") {
+            t.Fatalf("stderr = %q", errOut)
+        }
+    })
+}
+
+// stubRunner implements the ingester runner with configurable errors.
+type stubRunner struct{ backfillErr, deltaErr error }
+
+func (r stubRunner) Backfill(ctx context.Context) error { return r.backfillErr }
+func (r stubRunner) Delta(ctx context.Context) error    { return r.deltaErr }
