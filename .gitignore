@@ -15,6 +15,9 @@ api/dist/
 # Python
 __pycache__/
 *.pyc
+.coverage
+.pytest_cache/
+.ruff_cache/
 
 # Misc
 .DS_Store
