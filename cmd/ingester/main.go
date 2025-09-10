@@ -17,6 +17,8 @@ import (
 var (
     // version is set via -ldflags "-X main.version=..."
     version = "dev"
+    // exit is aliased to os.Exit to allow overriding in tests.
+    exit = os.Exit
 )
 
 // env gets an environment variable or returns a fallback.
@@ -108,30 +110,30 @@ func main() {
 
     if address == "" {
         fmt.Fprintln(os.Stderr, "missing --address (0x...); see --help")
-        os.Exit(2)
+        exit(2)
     }
     // Basic address shape validation. Full EIP-55 checksum is enforced upstream.
     if ok, _ := regexp.MatchString(`^0x[a-fA-F0-9]{40}$`, address); !ok {
         fmt.Fprintln(os.Stderr, "invalid --address; expected 0x-prefixed 40 hex chars")
-        os.Exit(2)
+        exit(2)
     }
 
     mode = strings.ToLower(mode)
     if mode != "backfill" && mode != "delta" {
         fmt.Fprintf(os.Stderr, "unknown --mode %q (use backfill|delta)\n", mode)
-        os.Exit(2)
+        exit(2)
     }
     if toBlock > 0 && fromBlock > toBlock {
         fmt.Fprintln(os.Stderr, "--from-block cannot be greater than --to-block")
-        os.Exit(2)
+        exit(2)
     }
     if confirmations < 0 {
         fmt.Fprintln(os.Stderr, "--confirmations must be >= 0")
-        os.Exit(2)
+        exit(2)
     }
     if batch <= 0 {
         fmt.Fprintln(os.Stderr, "--batch must be > 0")
-        os.Exit(2)
+        exit(2)
     }
 
     opts := ingest.Options{
@@ -177,7 +179,7 @@ func main() {
     }
     if err != nil {
         fmt.Fprintf(os.Stderr, "ingestion error: %v\n", err)
-        os.Exit(1)
+        exit(1)
     }
     fmt.Println("ok")
 }
