@@ -6,8 +6,10 @@ import sys
 from typing import Dict, Tuple, Optional
 
 
+
 def run(cmd, check=True):
     return subprocess.run(cmd, check=check, text=True, capture_output=True)
+
 
 
 def gh_exists():
@@ -16,6 +18,7 @@ def gh_exists():
         return True
     except Exception:
         return False
+
 
 
 def ensure_label(name: str, color: str, description: str, repo: Optional[str] = None):
@@ -31,6 +34,7 @@ def ensure_label(name: str, color: str, description: str, repo: Optional[str] = 
     if res.returncode != 0:
         # Non-fatal: might lack permission; adding labels to issues may still work or fail gracefully.
         sys.stderr.write(f"Warning: failed to create label '{name}': {res.stderr}\n")
+
 
 
 def ensure_milestone(title: str, description: str, repo: str) -> int:
@@ -62,10 +66,12 @@ def ensure_milestone(title: str, description: str, repo: str) -> int:
         raise
 
 
+
 def get_issue_map(repo: str) -> Dict[str, int]:
     res = run(["gh", "issue", "list", "--repo", repo, "--limit", "200", "--state", "open", "--json", "number,title"])
     data = json.loads(res.stdout)
     return {item["title"]: item["number"] for item in data}
+
 
 
 def apply_issue(repo: str, number: int, priority: str, milestone_title: str):
@@ -106,6 +112,7 @@ def apply_issue(repo: str, number: int, priority: str, milestone_title: str):
     for lbl in labels:
         patch_cmd += ["-f", f"labels[]={lbl}"]
     run(patch_cmd)
+
 
 
 def main():

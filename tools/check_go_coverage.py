@@ -4,6 +4,7 @@ import sys
 import re
 
 
+
 def main():
     if len(sys.argv) != 2:
         print("usage: check_go_coverage.py coverage.out", file=sys.stderr)
@@ -42,4 +43,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

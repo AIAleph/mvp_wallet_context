@@ -21,8 +21,10 @@ from pathlib import Path
 from typing import Optional
 
 
+
 def run(cmd, check=True):
     return subprocess.run(cmd, check=check, text=True, capture_output=True)
+
 
 
 def gh_exists():
@@ -31,6 +33,7 @@ def gh_exists():
         return True
     except Exception:
         return False
+
 
 
 def ensure_label(name: str, color: str = "ededed", description: str = "", repo: Optional[str] = None, dry_run: bool = False):
@@ -51,6 +54,7 @@ def ensure_label(name: str, color: str = "ededed", description: str = "", repo: 
     run(cmd, check=True)
 
 
+
 def create_issue(title: str, body: str, labels: list[str], repo: Optional[str] = None, dry_run: bool = False):
     cmd = ["gh"]
     if repo:
@@ -63,6 +67,7 @@ def create_issue(title: str, body: str, labels: list[str], repo: Optional[str] =
         print("DRY-RUN:", " ".join(cmd))
         return
     run(cmd, check=True)
+
 
 
 def main():
