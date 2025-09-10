@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { app } from './server'
-import { start } from './server'
+import { app } from './server.js'
+import { start } from './server.js'
 
 describe('API server', () => {
   it('GET /health returns ok', async () => {
