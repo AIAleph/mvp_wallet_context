@@ -36,7 +36,13 @@ def gh_exists():
 
 
 
-def ensure_label(name: str, color: str = "ededed", description: str = "", repo: Optional[str] = None, dry_run: bool = False):
+def ensure_label(
+    name: str,
+    color: str = "ededed",
+    description: str = "",
+    repo: Optional[str] = None,
+    dry_run: bool = False,
+):
     # Check if label exists
     base = ["gh"]
     if repo:
@@ -45,7 +51,13 @@ def ensure_label(name: str, color: str = "ededed", description: str = "", repo: 
     if res.returncode == 0:
         return
     # Create label
-    cmd = base + ["label", "create", name, "--color", color]
+    cmd = base + [
+        "label",
+        "create",
+        name,
+        "--color",
+        color,
+    ]
     if description:
         cmd += ["--description", description]
     if dry_run:
@@ -55,11 +67,24 @@ def ensure_label(name: str, color: str = "ededed", description: str = "", repo: 
 
 
 
-def create_issue(title: str, body: str, labels: list[str], repo: Optional[str] = None, dry_run: bool = False):
+def create_issue(
+    title: str,
+    body: str,
+    labels: list[str],
+    repo: Optional[str] = None,
+    dry_run: bool = False,
+):
     cmd = ["gh"]
     if repo:
         cmd += ["--repo", repo]
-    cmd += ["issue", "create", "--title", title, "--body", body]
+    cmd += [
+        "issue",
+        "create",
+        "--title",
+        title,
+        "--body",
+        body,
+    ]
     # Multiple --label flags are supported
     for lbl in labels:
         cmd += ["--label", lbl]

@@ -11,7 +11,9 @@ def main():
         sys.exit(2)
     cov = sys.argv[1]
     try:
-        out = subprocess.check_output(["go", "tool", "cover", "-func", cov], text=True)
+        out = subprocess.check_output(
+            ["go", "tool", "cover", "-func", cov], text=True
+        )
     except Exception as e:
         print(f"failed to read coverage: {e}", file=sys.stderr)
         sys.exit(1)

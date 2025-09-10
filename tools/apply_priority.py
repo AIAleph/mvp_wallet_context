@@ -21,7 +21,9 @@ def gh_exists():
 
 
 
-def ensure_label(name: str, color: str, description: str, repo: Optional[str] = None):
+def ensure_label(
+    name: str, color: str, description: str, repo: Optional[str] = None
+):
     base = ["gh"]
     if repo:
         base += ["--repo", repo]
@@ -30,7 +32,19 @@ def ensure_label(name: str, color: str, description: str, repo: Optional[str] = 
     if res.returncode == 0:
         return
     # Create
-    res = run(base + ["label", "create", name, "--color", color, "--description", description], check=False)
+    res = run(
+        base
+        + [
+            "label",
+            "create",
+            name,
+            "--color",
+            color,
+            "--description",
+            description,
+        ],
+        check=False,
+    )
     if res.returncode != 0:
         # Non-fatal: might lack permission; adding labels to issues may still work or fail gracefully.
         sys.stderr.write(f"Warning: failed to create label '{name}': {res.stderr}\n")
@@ -39,7 +53,15 @@ def ensure_label(name: str, color: str, description: str, repo: Optional[str] = 
 
 def ensure_milestone(title: str, description: str, repo: str) -> int:
     # List milestones
-    res = run(["gh", "api", f"repos/{repo}/milestones", "-q", ".[] | {title: .title, number: .number}"])
+    res = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/milestones",
+            "-q",
+            ".[] | {title: .title, number: .number}",
+        ]
+    )
     numbers = {}
     # Parse line-delimited JSON objects
     for line in res.stdout.strip().splitlines():
@@ -53,10 +75,21 @@ def ensure_milestone(title: str, description: str, repo: str) -> int:
     if title in numbers:
         return int(numbers[title])
     # Create
-    create = run([
-        "gh", "api", f"repos/{repo}/milestones", "-X", "POST",
-        "-f", f"title={title}", "-f", "state=open", "-f", f"description={description}"
-    ])
+    create = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/milestones",
+            "-X",
+            "POST",
+            "-f",
+            f"title={title}",
+            "-f",
+            "state=open",
+            "-f",
+            f"description={description}",
+        ]
+    )
     try:
         created = json.loads(create.stdout)
         return int(created["number"])
@@ -68,7 +101,21 @@ def ensure_milestone(title: str, description: str, repo: str) -> int:
 
 
 def get_issue_map(repo: str) -> Dict[str, int]:
-    res = run(["gh", "issue", "list", "--repo", repo, "--limit", "200", "--state", "open", "--json", "number,title"])
+    res = run(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--limit",
+            "200",
+            "--state",
+            "open",
+            "--json",
+            "number,title",
+        ]
+    )
     data = json.loads(res.stdout)
     return {item["title"]: item["number"] for item in data}
 
@@ -77,15 +124,31 @@ def get_issue_map(repo: str) -> Dict[str, int]:
 def apply_issue(repo: str, number: int, priority: str, milestone_title: str):
     # First try gh issue edit
     cmd = [
-        "gh", "issue", "edit", str(number), "--repo", repo,
-        "--add-label", priority, "--milestone", milestone_title
+        "gh",
+        "issue",
+        "edit",
+        str(number),
+        "--repo",
+        repo,
+        "--add-label",
+        priority,
+        "--milestone",
+        milestone_title,
     ]
     res = run(cmd, check=False)
     if res.returncode == 0:
         return
     # Fallback via API requires milestone number
     # Fetch milestone list
-    ms_res = run(["gh", "api", f"repos/{repo}/milestones", "-q", ".[] | {title: .title, number: .number}"])
+    ms_res = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/milestones",
+            "-q",
+            ".[] | {title: .title, number: .number}",
+        ]
+    )
     milestones = {}
     for line in ms_res.stdout.strip().splitlines():
         if not line.strip():
@@ -106,8 +169,13 @@ def apply_issue(repo: str, number: int, priority: str, milestone_title: str):
         labels.append(priority)
     # Patch issue
     patch_cmd = [
-        "gh", "api", f"repos/{repo}/issues/{number}", "-X", "PATCH",
-        "-f", f"milestone={ms_number}"
+        "gh",
+        "api",
+        f"repos/{repo}/issues/{number}",
+        "-X",
+        "PATCH",
+        "-f",
+        f"milestone={ms_number}",
     ]
     for lbl in labels:
         patch_cmd += ["-f", f"labels[]={lbl}"]
