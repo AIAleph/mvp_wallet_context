@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { app } from './server'
+import { start } from './server'
 
 describe('API server', () => {
   it('GET /health returns ok', async () => {
@@ -17,5 +18,15 @@ describe('API server', () => {
     expect(ok.statusCode).toBe(200)
     expect(ok.json()).toEqual({ accepted: true })
   })
-})
 
+  it('start() listens using PORT env and can close', async () => {
+    const prev = process.env.PORT
+    process.env.PORT = '0'
+    try {
+      await start()
+      await app.close()
+    } finally {
+      process.env.PORT = prev
+    }
+  })
+})

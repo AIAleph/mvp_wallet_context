@@ -4,6 +4,7 @@ import sys
 import pytest
 
 import check_go_coverage as mod
+import runpy
 
 
 def _set_argv(tmp_path, cov_name="coverage.out"):
@@ -117,3 +118,11 @@ def test_parse_fail(monkeypatch, tmp_path, capsys):
     assert ei.value.code == 1
     err = capsys.readouterr().err
     assert "could not parse total coverage" in err
+
+
+def test_run_as_main_uses_entrypoint(tmp_path):
+    cov = tmp_path / "coverage.out"
+    cov.write_text("")
+    sys.argv = ["check_go_coverage.py"]
+    with pytest.raises(SystemExit):
+        runpy.run_module("check_go_coverage", run_name="__main__")

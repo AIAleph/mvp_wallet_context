@@ -80,6 +80,50 @@ def test_ensure_label_create_dry_run(monkeypatch, capsys):
     assert "label create name --color ededed" in out
 
 
+def test_run_wrapper(monkeypatch):
+    called = {}
+
+    def fake_run(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        called["ok"] = True
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    res = mod.run(["echo", "ok"])  # should call our fake_run
+    assert isinstance(res, subprocess.CompletedProcess)
+    assert called.get("ok") is True
+
+
+def test_create_issue_exec(monkeypatch):
+    # Ensure non-dry-run path calls run
+    captured = {}
+
+    def fake_run(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    mod.create_issue("T", "B", ["l1"], repo=None, dry_run=False)
+    assert captured["cmd"][0] == "gh"
+
+
+def test_ensure_label_exec(monkeypatch):
+    # View fails then create has no description branch
+    seq = []
+
+    def fake_run(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        if len(seq) == 0 and cmd[:3] == ["gh", "label", "view"]:
+            seq.append("view")
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+        if len(seq) == 1 and cmd[:3] == ["gh", "label", "create"]:
+            seq.append("create")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected run: {cmd}")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    mod.ensure_label("x", color="ededed", description="", repo=None, dry_run=False)
+    assert seq == ["view", "create"]
+
+
 def test_create_issue_dry_run(monkeypatch, capsys):
     stub = StubRun()
     monkeypatch.setattr(mod, "run", stub)
@@ -126,3 +170,58 @@ def test_main_gh_missing(monkeypatch):
     with pytest.raises(SystemExit) as ei:
         mod.main()
     assert ei.value.code == 1
+
+
+def test_main_ensure_and_create_errors(monkeypatch, capsys):
+    # Make gh_exists return True
+    monkeypatch.setattr(mod, "gh_exists", lambda: True)
+
+    # cause ensure_label to raise on first item to hit warning path, but continue
+    calls = {"ensured": 0, "created": 0}
+
+    def fake_ensure_label(name, color, desc, repo=None, dry_run=False):  # noqa: ARG001
+        calls["ensured"] += 1
+        if name == "backend":
+            raise subprocess.CalledProcessError(1, ["gh"])  # warning path
+
+    def fake_create_issue(
+        title, body, labels, repo=None, dry_run=False
+    ):  # noqa: ARG001
+        calls["created"] += 1
+        if title == "T2":
+            raise subprocess.CalledProcessError(1, ["gh"])  # error path
+
+    monkeypatch.setattr(mod, "ensure_label", fake_ensure_label)
+    monkeypatch.setattr(mod, "create_issue", fake_create_issue)
+
+    sample = [
+        {"title": "T1", "labels": ["tooling"], "body": "B1"},
+        {"title": "", "labels": [], "body": "B2"},  # skipped
+        {"title": "T2", "labels": [], "body": "B3"},  # error
+    ]
+    # Read issues.json content from our sample
+    monkeypatch.setattr(Path, "read_text", lambda self=None: json.dumps(sample))  # type: ignore[misc]
+
+    import sys as _sys
+
+    _sys.argv = ["create_github_issues.py", "--repo", "o/r"]
+    mod.main()
+    out = capsys.readouterr().out
+    assert "Skipping issue without title" in out
+    assert "Created issue: T1" in out
+    assert "Error creating issue 'T2'" in out
+
+
+def test_run_module_main_safe(monkeypatch):
+    # Force gh_exists() to be false in the spawned module by stubbing subprocess.run
+    def fake_subproc(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        raise RuntimeError("no gh")
+
+    import subprocess as _sp
+    import runpy as _runpy
+    import sys as _sys
+
+    monkeypatch.setattr(_sp, "run", fake_subproc)
+    _sys.argv = ["create_github_issues.py"]
+    with pytest.raises(SystemExit):
+        _runpy.run_module("create_github_issues", run_name="__main__")

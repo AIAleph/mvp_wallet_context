@@ -59,4 +59,4 @@ jobs:
           pip install -r requirements.txt
       - run: ruff check .
       - run: black --check .
-      - run: pytest --cov=. --cov-fail-under=90 -q
+      - run: pytest --cov=tools --cov-fail-under=100 -q

@@ -1,5 +1,6 @@
 import json
 import subprocess
+import pytest
 
 import apply_priority as mod
 
@@ -39,6 +40,26 @@ def test_gh_exists(monkeypatch):
     )
     monkeypatch.setattr(mod, "run", stub)
     assert mod.gh_exists() is True
+
+    # Failure path
+    def boom(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        raise RuntimeError("no gh")
+
+    monkeypatch.setattr(mod, "run", boom)
+    assert mod.gh_exists() is False
+
+
+def test_run_wrapper_calls_subprocess(monkeypatch):
+    called = {}
+
+    def fake_subproc(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        called["ok"] = True
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_subproc)
+    res = mod.run(["echo", "hi"])  # should call our fake_subproc
+    assert isinstance(res, subprocess.CompletedProcess)
+    assert called.get("ok") is True
 
 
 def test_ensure_label_paths(monkeypatch, capsys):
@@ -158,6 +179,151 @@ def test_apply_issue_fallback(monkeypatch):
     monkeypatch.setattr(mod, "run", fake_run)
     mod.apply_issue("o/r", 99, "P0", "M1")
     assert any("/issues/" in c[2] and "-X" in c and "PATCH" in c for c in calls)
+
+
+def test_apply_issue_milestone_not_found(monkeypatch):
+    # First edit fails, milestones list does not contain target
+    def fake_run(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        if cmd[:3] == ["gh", "issue", "edit"]:
+            return cp_fail(cmd)
+        if cmd[:2] == ["gh", "api"] and "milestones" in cmd[2] and "-q" in cmd:
+            return cp_ok(cmd, out="")
+        raise AssertionError(f"unexpected run: {cmd}")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    with pytest.raises(RuntimeError):
+        mod.apply_issue("o/r", 1, "P0", "MISSING")
+
+
+def test_ensure_label_create_success_with_repo(monkeypatch):
+    # Simulate view fail then successful create
+    seq = []
+
+    def fake_run(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        nonlocal seq
+        if len(seq) == 0 and cmd[0] == "gh" and "label" in cmd and "view" in cmd:
+            seq.append("view")
+            return cp_fail(cmd)
+        if len(seq) == 1 and cmd[0] == "gh" and "label" in cmd and "create" in cmd:
+            seq.append("create")
+            return cp_ok(cmd)
+        raise AssertionError(f"unexpected run: {cmd} parts:{cmd[:4]}")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    mod.ensure_label("NAME", "cccccc", "desc", repo="o/r")
+    assert seq == ["view", "create"]
+
+
+def test_ensure_milestone_lines_and_parse_error(monkeypatch, capsys):
+    # Listing includes blank and invalid lines to hit continue branches
+    listing = "INVALID\n\n" + json.dumps({"title": "M1", "number": 1}) + "\n"
+
+    def fake_run(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        if cmd[:2] == ["gh", "api"] and "-q" in cmd:
+            return cp_ok(cmd, out=listing)
+        if cmd[:2] == ["gh", "api"] and "-X" in cmd and "POST" in cmd:
+            # Return bad JSON to trigger parse error
+            return cp_ok(cmd, out="")
+        raise AssertionError(f"unexpected run: {cmd}")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    with pytest.raises(Exception):
+        mod.ensure_milestone("M2", "desc", "o/r")
+    err = capsys.readouterr().err
+    assert "Failed to create milestone:" in err
+
+
+def test_main_gh_missing_path(monkeypatch):
+    monkeypatch.setattr(mod, "gh_exists", lambda: False)
+    import sys as _sys
+
+    _sys.argv = ["apply_priority.py", "--repo", "o/r"]
+    with pytest.raises(SystemExit) as ei:
+        mod.main()
+    assert ei.value.code == 1
+
+
+def test_main_apply_issue_error_print(monkeypatch, capsys):
+    monkeypatch.setattr(mod, "gh_exists", lambda: True)
+
+    def fake_get_issue_map(repo):  # noqa: ARG001
+        return {"Scaffold repo structure (Go-first layout)": 123}
+
+    def fake_apply_issue(repo, number, prio, ms_title):  # noqa: ARG001
+        raise subprocess.CalledProcessError(1, ["gh"], stderr="fail")
+
+    # No-ops for labels and milestones
+    monkeypatch.setattr(mod, "ensure_label", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "ensure_milestone", lambda *a, **k: 1)
+    monkeypatch.setattr(mod, "get_issue_map", fake_get_issue_map)
+    monkeypatch.setattr(mod, "apply_issue", fake_apply_issue)
+
+    import sys as _sys
+
+    _sys.argv = ["apply_priority.py", "--repo", "o/r"]
+    mod.main()
+    out = capsys.readouterr().out
+    assert "Failed to update issue #123" in out
+
+
+def test_apply_issue_fallback_no_labels(monkeypatch):
+    calls = []
+    lines = json.dumps({"title": "M1", "number": 1}) + "\n"
+    issue_obj = {}  # no labels field
+
+    def fake_run(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        calls.append(list(cmd))
+        if cmd[:3] == ["gh", "issue", "edit"]:
+            return cp_fail(cmd)
+        if cmd[:2] == ["gh", "api"] and "milestones" in cmd[2] and "-q" in cmd:
+            return cp_ok(cmd, out=lines)
+        if cmd[:2] == ["gh", "api"] and "/issues/" in cmd[2] and len(cmd) == 3:
+            return cp_ok(cmd, out=json.dumps(issue_obj))
+        if cmd[:2] == ["gh", "api"] and "/issues/" in cmd[2] and "PATCH" in cmd:
+            return cp_ok(cmd)
+        raise AssertionError(f"unexpected run: {cmd}")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    mod.apply_issue("o/r", 7, "P1", "M1")
+    assert any("PATCH" in c for c in calls)
+
+
+def test_run_module_main_safe(monkeypatch):
+    # Force gh_exists() to be false in the spawned module by stubbing subprocess.run
+    def fake_subproc(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        raise RuntimeError("no gh")
+
+    import subprocess as _sp
+    import runpy as _runpy
+    import sys as _sys
+
+    monkeypatch.setattr(_sp, "run", fake_subproc)
+    _sys.argv = ["apply_priority.py", "--repo", "o/r"]
+    with pytest.raises(SystemExit):
+        _runpy.run_module("apply_priority", run_name="__main__")
+
+
+def test_apply_issue_milestone_parse_skips(monkeypatch):
+    # Ensure we hit both skip branches when parsing milestones in apply_issue()
+    calls = []
+    listing = "INVALID\n\n" + json.dumps({"title": "M1", "number": 1}) + "\n"
+    issue_obj = {"labels": []}
+
+    def fake_run(cmd, check=True, text=True, capture_output=True):  # noqa: ARG001
+        calls.append(list(cmd))
+        if cmd[:3] == ["gh", "issue", "edit"]:
+            return cp_fail(cmd)
+        if cmd[:2] == ["gh", "api"] and "milestones" in cmd[2] and "-q" in cmd:
+            return cp_ok(cmd, out=listing)
+        if cmd[:2] == ["gh", "api"] and "/issues/" in cmd[2] and len(cmd) == 3:
+            return cp_ok(cmd, out=json.dumps(issue_obj))
+        if cmd[:2] == ["gh", "api"] and "/issues/" in cmd[2] and "PATCH" in cmd:
+            return cp_ok(cmd)
+        raise AssertionError(f"unexpected run: {cmd}")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    mod.apply_issue("o/r", 11, "P0", "M1")
+    assert any("PATCH" in c for c in calls)
 
 
 def test_main_plan_flow(monkeypatch, capsys):
