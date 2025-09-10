@@ -156,9 +156,8 @@ func TestMain_InvalidAddress(t *testing.T) {
 func TestMain_UnknownMode(t *testing.T) {
     withFreshFlags(t, func() {
         oldArgs := os.Args
-        os.Args = []string{"ingester", "--address", strings.Repeat("a", 40)}
-        os.Args[3] = "0x" + os.Args[3]
-        os.Args = append(os.Args, "--mode", "weird")
+        addr := "0x" + strings.Repeat("a", 40)
+        os.Args = []string{"ingester", "--address", addr, "--mode", "weird"}
         defer func() { os.Args = oldArgs }()
         oldExit := exit
         defer func() { exit = oldExit }()
@@ -297,4 +296,3 @@ func TestMain_DeltaOK(t *testing.T) {
         }
     })
 }
-

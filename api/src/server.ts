@@ -1,5 +1,6 @@
 import Fastify from 'fastify'
 import { z } from 'zod'
+import { fileURLToPath } from 'url'
 
 // Minimal Fastify server scaffold. Final API will expose endpoints for sync,
 // summary, lists, and semantic search.
@@ -20,10 +21,10 @@ export async function start() {
   await app.listen({ port, host: '0.0.0.0' })
 }
 
-if (require.main === module) {
+const isMain = process.argv[1] === fileURLToPath(import.meta.url)
+if (isMain) {
   start().catch((err) => {
     app.log.error(err)
     process.exit(1)
   })
 }
-
