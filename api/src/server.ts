@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url'
 
 // Minimal Fastify server scaffold. Final API will expose endpoints for sync,
 // summary, lists, and semantic search.
-const app = Fastify({ logger: true })
+export const app = Fastify({ logger: true })
 
 app.get('/health', async () => ({ status: 'ok' }))
 
