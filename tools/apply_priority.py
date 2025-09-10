@@ -124,16 +124,10 @@ def main():
     ensure_label("P2", "fbca04", "Beta/optional", repo)
 
     # Ensure milestones
-    m0 = ensure_milestone("M0 Setup & Schema", "Scaffold, config, docker, ClickHouse schema, Makefile", repo)
-    m1 = ensure_milestone("M1 Ingestion Core", "Provider client, cursors, fetchers, normalization, decoders, idempotency, reorgs", repo)
-    m2 = ensure_milestone("M2 Enrichment + API", "EOA/contract, ERC-165, labels, summary + lists API, counters", repo)
-    m3 = ensure_milestone("M3 Semantic Search (beta)", "Embeddings pipeline, ANN queries, /search API", repo)
-    milestones = {
-        "M0 Setup & Schema": m0,
-        "M1 Ingestion Core": m1,
-        "M2 Enrichment + API": m2,
-        "M3 Semantic Search (beta)": m3,
-    }
+    ensure_milestone("M0 Setup & Schema", "Scaffold, config, docker, ClickHouse schema, Makefile", repo)
+    ensure_milestone("M1 Ingestion Core", "Provider client, cursors, fetchers, normalization, decoders, idempotency, reorgs", repo)
+    ensure_milestone("M2 Enrichment + API", "EOA/contract, ERC-165, labels, summary + lists API, counters", repo)
+    ensure_milestone("M3 Semantic Search (beta)", "Embeddings pipeline, ANN queries, /search API", repo)
 
     # Map titles to (priority, milestone_title)
     P0_M0 = [
