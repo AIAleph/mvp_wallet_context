@@ -1,0 +1,213 @@
+[
+  {
+    "title": "Epic: Ingestion Pipeline",
+    "labels": ["epic", "backend"],
+    "body": "Track all work for the address-based, incremental ingestion: backfill, delta, confirmations, checkpoints, retries, rate limits. Parent for fetchers, idempotency, and reorg handling."
+  },
+  {
+    "title": "Epic: Normalization & Decoders",
+    "labels": ["epic", "backend"],
+    "body": "Unify tx/logs/traces into the canonical schema and implement ABI/topic decoders with golden tests."
+  },
+  {
+    "title": "Epic: Enrichment & Labels",
+    "labels": ["epic", "backend"],
+    "body": "EOA/contract detection, ERC-165 probing, metadata, proxy detection, and curated label registry with confidence."
+  },
+  {
+    "title": "Epic: Data Model & SQL",
+    "labels": ["epic", "sql"],
+    "body": "ClickHouse schema, indexes, materialized views, and common queries."
+  },
+  {
+    "title": "Epic: Embeddings & Search",
+    "labels": ["epic", "embeddings"],
+    "body": "Entity embeddings, HNSW index, and semantic search endpoints."
+  },
+  {
+    "title": "Epic: API",
+    "labels": ["epic", "api"],
+    "body": "Fastify + Zod API for sync, summary, lists, and search."
+  },
+  {
+    "title": "Epic: Observability & Reliability",
+    "labels": ["epic", "ops"],
+    "body": "Structured logging, metrics, rate limiting, backoff, circuit breaker."
+  },
+  {
+    "title": "Epic: Tooling & CI",
+    "labels": ["epic", "tooling"],
+    "body": "Linters, fixtures, tests, docker-compose for ClickHouse, Makefile."
+  },
+  {
+    "title": "Epic: Docs",
+    "labels": ["epic", "docs"],
+    "body": "PRD, ADRs, runbooks, and developer onboarding."
+  },
+  {
+    "title": "Scaffold repo structure (Go-first layout)",
+    "labels": ["backend", "tooling"],
+    "body": "Create directories: cmd/ingester, internal/{eth,ingest,normalize,enrich}, pkg/ch, api/, tools/, sql/, testdata/, fixtures/abi/. Initialize go.mod, Node 20 workspace for api, and Python tools."
+  },
+  {
+    "title": "Define 12-factor configuration",
+    "labels": ["backend", "ops"],
+    "body": "Env vars: ETH_PROVIDER_URL, CLICKHOUSE_URL/DB/USER/PASS, SYNC_CONFIRMATIONS (12), BATCH_BLOCKS, RATE_LIMIT, optional REDIS_URL, EMBEDDING_MODEL."
+  },
+  {
+    "title": "SQL: Author ClickHouse schema.sql",
+    "labels": ["sql"],
+    "body": "Create tables: addresses, transactions, token_transfers, approvals, contracts, labels, embeddings. Add HNSW index and materialized views for per-address counters."
+  },
+  {
+    "title": "SQL: Add surrogate UIDs and adjust ORDER BY",
+    "labels": ["sql"],
+    "body": "Introduce event_uid, trace_uid, ingested_at; set ReplacingMergeTree(ingested_at) and ORDER BY to start with surrogate keys to enable replacement independent of timestamps."
+  },
+  {
+    "title": "SQL: Common queries and projections",
+    "labels": ["sql"],
+    "body": "Add sql/queries for summary, token/NFT lists, approvals, dApp usage, and semantic search helpers."
+  },
+  {
+    "title": "Provider client with retries/backoff and rate limiting",
+    "labels": ["backend", "ingestion"],
+    "body": "Shared http.Client with timeouts, exponential backoff, circuit breaker; adapters for Alchemy/Infura/QuickNode/Covalent."
+  },
+  {
+    "title": "Implement address backfill and delta cursors",
+    "labels": ["backend", "ingestion"],
+    "body": "Maintain addresses.last_synced_block, process ranges with >=12 confirmations, checkpoint per data type."
+  },
+  {
+    "title": "Fetcher: external transactions (from/to)",
+    "labels": ["backend", "ingestion"],
+    "body": "Batch by block range, map to canonical transaction rows, include input_method decoding."
+  },
+  {
+    "title": "Fetcher: internal traces",
+    "labels": ["backend", "ingestion"],
+    "body": "Trace collection via provider APIs; normalize to transactions with is_internal=1 and trace_id."
+  },
+  {
+    "title": "Fetcher: ERC-20/721/1155 transfers via logs",
+    "labels": ["backend", "ingestion"],
+    "body": "eth_getLogs topic filters; map to token_transfers with amount_raw, decimals (when known), token_id for NFTs."
+  },
+  {
+    "title": "Fetcher: approvals (ERC-20/721/1155)",
+    "labels": ["backend", "ingestion"],
+    "body": "Capture Approval and ApprovalForAll events; write to approvals table with allowance_raw and token_id when applicable."
+  },
+  {
+    "title": "Detect contract creation and persist to contracts",
+    "labels": ["backend", "ingestion"],
+    "body": "Identify creation via tx/to=nil and traces; seed contracts table with created_at_tx."
+  },
+  {
+    "title": "Normalization: unify types and timestamps",
+    "labels": ["backend", "normalization"],
+    "body": "Apply canonical typing (no floats), UTC DateTime64(3), stable column mapping across data sources."
+  },
+  {
+    "title": "Decoders: ERC-20/721/1155 topics & selectors",
+    "labels": ["backend", "normalization"],
+    "body": "Implement ABI/topic decoders; derive input_method from call data; add golden tests with fixtures."
+  },
+  {
+    "title": "Idempotency & dedup strategy",
+    "labels": ["backend", "ingestion"],
+    "body": "Ensure logical keys (tx_hash, log_index)/(tx_hash, trace_id) and ReplacingMergeTree versioning; verify ReplacingMergeTree cleaning queries."
+  },
+  {
+    "title": "Reorg handling with N confirmations",
+    "labels": ["backend", "ingestion"],
+    "body": "Only finalize blocks with >=12 confs; keep a rolling window to re-upsert."
+  },
+  {
+    "title": "Enrichment: EOA vs contract via eth_getCode",
+    "labels": ["backend", "enrichment"],
+    "body": "Cache code existence; write to contracts table."
+  },
+  {
+    "title": "Enrichment: ERC-165 and metadata (name/symbol/decimals)",
+    "labels": ["backend", "enrichment"],
+    "body": "Probe supportsInterface; call standard getters when present; persist metadata."
+  },
+  {
+    "title": "Enrichment: proxy detection (EIP-1967/UUPS)",
+    "labels": ["backend", "enrichment"],
+    "body": "Read implementation slots; classify underlying implementation."
+  },
+  {
+    "title": "Label registry and confidence scoring",
+    "labels": ["backend", "enrichment"],
+    "body": "Import curated CSV/JSON, merge multiple sources, compute confidence, persist to labels."
+  },
+  {
+    "title": "Embeddings job and storage",
+    "labels": ["embeddings", "backend"],
+    "body": "Implement embed_entities job with pluggable model; store vectors, model, kind; add HNSW index."
+  },
+  {
+    "title": "Semantic search helpers and filters",
+    "labels": ["embeddings", "api"],
+    "body": "Cosine kNN queries with optional filters (kind/address)."
+  },
+  {
+    "title": "API: POST /v1/address/:address/sync",
+    "labels": ["api"],
+    "body": "Validate checksum; trigger backfill/delta for an address; return job status."
+  },
+  {
+    "title": "API: GET /v1/address/:address/summary",
+    "labels": ["api"],
+    "body": "Serve overview with counters and recent activity; leverage pre-aggregates."
+  },
+  {
+    "title": "API: GET lists (token-transfers, approvals, dapps)",
+    "labels": ["api"],
+    "body": "Paginated lists with filters; ClickHouse queries with ORDER BY and LIMIT/OFFSET or keyset pagination."
+  },
+  {
+    "title": "API: GET /v1/search (text + semantic)",
+    "labels": ["api", "embeddings"],
+    "body": "Combine text filters and ANN over embeddings; return relevant entities."
+  },
+  {
+    "title": "Observability: structured JSON logs",
+    "labels": ["ops", "tooling"],
+    "body": "Include address, from_block, to_block, cursor, provider in logs; no secrets."
+  },
+  {
+    "title": "Observability: metrics and health checks",
+    "labels": ["ops"],
+    "body": "Counters for RPC calls, retries, rows written; health endpoints."
+  },
+  {
+    "title": "Tooling: docker-compose for ClickHouse (and Redis)",
+    "labels": ["tooling", "ops"],
+    "body": "Local dev stack with ClickHouse server and keeper; optional Redis."
+  },
+  {
+    "title": "Testing: recorded RPC fixtures and CI",
+    "labels": ["testing", "tooling"],
+    "body": "Record fixtures for all fetchers; forbid live-chain calls in CI; run race tests."
+  },
+  {
+    "title": "Makefile and scripts",
+    "labels": ["tooling"],
+    "body": "Targets: schema, ingest ADDRESS=..., api, test, lint."
+  },
+  {
+    "title": "Docs: finalize PRD (EN) and ADR-0001",
+    "labels": ["docs"],
+    "body": "Ensure PRD and ADR are updated and linked from AGENTS.md."
+  }
+  ,
+  {
+    "title": "Docs: ADR-0002 Ingestion idempotency & reorg handling",
+    "labels": ["docs"],
+    "body": "Document surrogate UIDs, ingested_at versioning, confirmations, and query semantics. Link from AGENTS.md."
+  }
+]
