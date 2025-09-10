@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import create_github_issues as mod
+import pytest
 
 
 class StubRun:
@@ -115,3 +116,13 @@ def test_main_dry_run_minimal(monkeypatch, capsys, tmp_path):
     assert "DRY-RUN:" in out
     assert "issue create --title T1" in out
     assert "issue create --title T2" in out
+
+
+def test_main_gh_missing(monkeypatch):
+    monkeypatch.setattr(mod, "gh_exists", lambda: False)
+    import sys as _sys
+
+    _sys.argv = ["create_github_issues.py", "--repo", "o/r"]
+    with pytest.raises(SystemExit) as ei:
+        mod.main()
+    assert ei.value.code == 1

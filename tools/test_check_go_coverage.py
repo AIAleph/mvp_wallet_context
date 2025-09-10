@@ -78,3 +78,42 @@ def test_missing_total_line(monkeypatch, tmp_path, capsys):
     assert ei.value.code == 1
     err = capsys.readouterr().err
     assert "no total coverage line found" in err
+
+
+def test_usage_wrong_args(capsys):
+    sys.argv = ["check_go_coverage.py"]
+    with pytest.raises(SystemExit) as ei:
+        mod.main()
+    assert ei.value.code == 2
+    err = capsys.readouterr().err
+    assert "usage:" in err.lower()
+
+
+def test_failed_read(monkeypatch, tmp_path, capsys):
+    cov = tmp_path / "coverage.out"
+    cov.write_text("")
+    sys.argv = ["check_go_coverage.py", str(cov)]
+
+    def boom(cmd, text=False):  # noqa: ARG001
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(subprocess, "check_output", boom)
+    with pytest.raises(SystemExit) as ei:
+        mod.main()
+    assert ei.value.code == 1
+    err = capsys.readouterr().err
+    assert "failed to read coverage" in err
+
+
+def test_parse_fail(monkeypatch, tmp_path, capsys):
+    _set_argv(tmp_path)
+
+    def weird(cmd, text=False):  # noqa: ARG001
+        return "total: strange format 100 percent\n"
+
+    monkeypatch.setattr(subprocess, "check_output", weird)
+    with pytest.raises(SystemExit) as ei:
+        mod.main()
+    assert ei.value.code == 1
+    err = capsys.readouterr().err
+    assert "could not parse total coverage" in err

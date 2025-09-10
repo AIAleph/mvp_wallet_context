@@ -158,3 +158,56 @@ def test_apply_issue_fallback(monkeypatch):
     monkeypatch.setattr(mod, "run", fake_run)
     mod.apply_issue("o/r", 99, "P0", "M1")
     assert any("/issues/" in c[2] and "-X" in c and "PATCH" in c for c in calls)
+
+
+def test_main_plan_flow(monkeypatch, capsys):
+    # Exercise main() to cover plan building and iteration
+    calls = {
+        "labels": [],
+        "milestones": [],
+        "apply": [],
+    }
+
+    monkeypatch.setattr(mod, "gh_exists", lambda: True)
+
+    def fake_ensure_label(
+        name, color, description, repo=None, dry_run=False
+    ):  # noqa: ARG001
+        calls["labels"].append((name, color))
+
+    def fake_ensure_milestone(title, description, repo):  # noqa: ARG001
+        calls["milestones"].append(title)
+        # Return a dummy milestone number
+        return len(calls["milestones"]) + 100
+
+    # Only a subset of titles exists in repo mapping
+    mapping = {
+        "Scaffold repo structure (Go-first layout)": 1,
+        "Epic: API": 2,
+    }
+
+    def fake_get_issue_map(repo):  # noqa: ARG001
+        return mapping
+
+    def fake_apply_issue(repo, number, prio, ms_title):  # noqa: ARG001
+        calls["apply"].append((number, prio, ms_title))
+
+    monkeypatch.setattr(mod, "ensure_label", fake_ensure_label)
+    monkeypatch.setattr(mod, "ensure_milestone", fake_ensure_milestone)
+    monkeypatch.setattr(mod, "get_issue_map", fake_get_issue_map)
+    monkeypatch.setattr(mod, "apply_issue", fake_apply_issue)
+
+    # Run main
+    import sys as _sys
+
+    _sys.argv = ["apply_priority.py", "--repo", "o/r"]
+    mod.main()
+
+    # We applied at least the two mapped issues
+    assert any(n == 1 for (n, _, _) in calls["apply"])  # Scaffold repo structure
+    assert any(n == 2 for (n, _, _) in calls["apply"])  # Epic: API
+    # Priority labels ensured
+    ensured = {lbl for (lbl, _) in calls["labels"]}
+    assert {"P0", "P1", "P2"}.issubset(ensured)
+    # Milestones ensured (some subset)
+    assert any(t.startswith("M0 ") for t in calls["milestones"])
