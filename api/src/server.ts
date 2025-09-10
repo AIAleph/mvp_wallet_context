@@ -22,10 +22,11 @@ export async function start() {
 }
 
 const isMain = process.argv[1] === fileURLToPath(import.meta.url)
-/* c8 ignore next 5 */
+/* c8 ignore start */
 if (isMain) {
   start().catch((err) => {
     app.log.error(err)
     process.exit(1)
   })
 }
+/* c8 ignore stop */
