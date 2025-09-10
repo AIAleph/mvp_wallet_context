@@ -2,6 +2,10 @@
 bin/
 *.test
 *.out
+.gocache/
+
+# API test coverage artifacts
+api/coverage/
 
 # Node/TypeScript
 node_modules/
@@ -15,4 +19,3 @@ __pycache__/
 # Misc
 .DS_Store
 .env
-
