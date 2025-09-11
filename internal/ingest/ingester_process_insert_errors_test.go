@@ -1,5 +1,7 @@
 package ingest
 
+// Covers insert error paths for token transfers, approvals, and traces.
+
 import (
     "context"
     "io"

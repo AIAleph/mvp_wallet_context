@@ -1,5 +1,7 @@
 package config
 
+// Covers RedactDSN fallback scanning when URL parsing is absent or incomplete.
+
 import (
     "strings"
     "testing"

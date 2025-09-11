@@ -1,5 +1,7 @@
 package ingest
 
+// Covers Backfill/Delta flows and timestamp cache behavior.
+
 import (
     "context"
     "testing"

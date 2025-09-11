@@ -3,6 +3,7 @@ bin/
 *.test
 *.out
 .gocache/
+ingester
 
 # API test coverage artifacts
 api/coverage/

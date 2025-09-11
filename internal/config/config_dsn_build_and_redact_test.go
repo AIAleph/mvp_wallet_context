@@ -1,5 +1,7 @@
 package config
 
+// Covers DSN building with envs and redaction behavior.
+
 import "testing"
 
 func TestBuildClickHouseDSN_EmptyBaseOrDB(t *testing.T) {

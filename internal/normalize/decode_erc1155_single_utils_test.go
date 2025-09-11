@@ -1,5 +1,7 @@
 package normalize
 
+// Covers ERC-1155 single transfer decoding and helper utilities.
+
 import (
     "strings"
     "testing"
@@ -29,4 +31,3 @@ func TestWordToIntOverflow(t *testing.T) {
     // 80 hex 'f' is > int64 -> returns 0
     if got := wordToInt(strings.Repeat("f", 80)); got != 0 { t.Fatalf("overflow got %d", got) }
 }
-

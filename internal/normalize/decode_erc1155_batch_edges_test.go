@@ -1,5 +1,7 @@
 package normalize
 
+// Covers ERC-1155 batch decoding edges and ApprovalForAll false case.
+
 import (
     "fmt"
     "strings"

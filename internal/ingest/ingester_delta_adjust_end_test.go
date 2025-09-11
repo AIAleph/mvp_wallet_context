@@ -1,5 +1,7 @@
 package ingest
 
+// Covers delta end adjustment and default batching behavior.
+
 import (
     "context"
     "testing"
@@ -24,4 +26,3 @@ func TestBackfill_DefaultBatch(t *testing.T) {
     ing := NewWithProvider("0x", Options{FromBlock: 1, ToBlock: 2, BatchBlocks: 0}, provHead{h: 2})
     if err := ing.Backfill(context.Background()); err != nil { t.Fatal(err) }
 }
-

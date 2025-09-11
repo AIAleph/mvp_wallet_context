@@ -1,5 +1,7 @@
 package eth
 
+// Covers HTTP provider retries, decode errors, and enrichment paths.
+
 import (
     "bytes"
     "context"

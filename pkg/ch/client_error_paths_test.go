@@ -1,5 +1,7 @@
 package ch
 
+// Covers ping/insert error paths and unsupported schemes.
+
 import (
     "bytes"
     "context"

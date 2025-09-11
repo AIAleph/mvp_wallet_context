@@ -1,5 +1,7 @@
 package config
 
+// Covers BuildClickHouseDSN and RedactDSN parse edge cases.
+
 import "testing"
 
 func TestBuildClickHouseDSN_FallbackParseError_TrailingSlash(t *testing.T) {
@@ -18,4 +20,3 @@ func TestRedactDSN_ParseFail_NoAt_Unchanged(t *testing.T) {
     in := "http://["
     if out := RedactDSN(in); out != in { t.Fatalf("expected unchanged, got %q", out) }
 }
-

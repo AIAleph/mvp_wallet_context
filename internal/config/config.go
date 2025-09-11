@@ -59,17 +59,27 @@ func BuildClickHouseDSN() string {
     u, err := url.Parse(base)
     if err == nil {
         if user != "" {
-            if pass != "" { u.User = url.UserPassword(user, pass) } else { u.User = url.User(user) }
+            if pass != "" {
+                u.User = url.UserPassword(user, pass)
+            } else {
+                u.User = url.User(user)
+            }
         }
-        if strings.Trim(u.Path, "/") == "" {
+        // Normalize path and append db only when missing
+        p := strings.TrimRight(u.Path, "/")
+        switch {
+        case p == "":
             u.Path = "/" + db
-        } else if !strings.HasSuffix(u.Path, "/"+db) {
-            if strings.HasSuffix(u.Path, "/") { u.Path = u.Path + db } else { u.Path = u.Path + "/" + db }
+        case strings.HasSuffix(p, "/"+db):
+            // already includes db; leave as-is
+            u.Path = p
+        default:
+            u.Path = p + "/" + db
         }
         return u.String()
     }
-    // Fallback
-    if strings.HasSuffix(base, "/") { base = strings.TrimRight(base, "/") }
+    // Fallback for unparsable base URL
+    base = strings.TrimRight(base, "/")
     return base + "/" + db
 }
 

@@ -1,5 +1,7 @@
 package normalize
 
+// Covers addrFromTopic fallback on non-hex input.
+
 import "testing"
 
 func TestAddrFromTopicFallback(t *testing.T) {
@@ -8,4 +10,3 @@ func TestAddrFromTopicFallback(t *testing.T) {
         t.Fatalf("fallback got %s", got)
     }
 }
-

@@ -1,6 +1,6 @@
 Testing and Coverage
 
-This repo enforces 100% test coverage across Go, TypeScript (API), and Python (tools).
+This repo enforces 100% test coverage across Go, TypeScript (API), and Python (tools). See: [Test File Naming](#test-file-naming).
 
 Commands
 
@@ -40,3 +40,11 @@ Notes
 - The Go test commands set `GOCACHE`/`GOTMPDIR` to local folders to avoid sandbox issues on some systems.
 - Coverage for EVM handling intentionally avoids floats; tests ensure integer/hex safety and branch behavior across decoders and ClickHouse writes.
 
+Test File Naming
+
+- Prefer purpose‑focused names over generic suffixes like `more`, `extra`, or numeric variants.
+- Patterns
+  - Error‑path coverage: `<pkg>_<subject>_error_paths_test.go` (e.g., `http_provider_error_paths_test.go`, `client_error_paths_test.go`).
+  - Edge‑cases/decoders: `decode_<standard>_<aspect>_test.go` (e.g., `decode_erc1155_batch_edges_test.go`, `decode_erc1155_single_utils_test.go`).
+  - Ingest flows: `ingester_<flow_or_behavior>_test.go` (e.g., `ingester_backfill_delta_tscache_test.go`, `ingester_delta_adjust_end_test.go`, `ingester_process_insert_errors_test.go`).
+- Rationale: filenames should communicate test intent at a glance and be easy to `rg` by domain/behavior.
