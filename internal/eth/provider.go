@@ -11,6 +11,9 @@ type Provider interface {
     // BlockNumber returns the current head block number.
     BlockNumber(ctx context.Context) (uint64, error)
 
+    // BlockTimestamp returns the block timestamp in milliseconds since epoch.
+    BlockTimestamp(ctx context.Context, block uint64) (int64, error)
+
     // GetLogs fetches logs for the given address/topics in the block range [from, to].
     // Implementations should page internally and rate-limit.
     GetLogs(ctx context.Context, address string, from, to uint64, topics [][]string) ([]Log, error)
@@ -40,4 +43,3 @@ type Trace struct {
     BlockNum uint64
     TsMillis int64
 }
-
