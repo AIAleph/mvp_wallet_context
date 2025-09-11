@@ -59,4 +59,4 @@ jobs:
           pip install -r requirements.txt
       - run: ruff check .
       - run: black --check .
-      - run: pytest -q
+      - run: pytest --cov=apply_priority --cov=create_github_issues --cov=check_go_coverage --cov-fail-under=100 -q

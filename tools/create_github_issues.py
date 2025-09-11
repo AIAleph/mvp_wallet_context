@@ -13,6 +13,7 @@ Usage:
 Notes:
 - Idempotency is best-effort: labels are created if missing; issues are created without dedup checks (avoid re-running or use --dry-run).
 """
+
 import argparse
 import json
 import subprocess
@@ -33,7 +34,13 @@ def gh_exists():
         return False
 
 
-def ensure_label(name: str, color: str = "ededed", description: str = "", repo: Optional[str] = None, dry_run: bool = False):
+def ensure_label(
+    name: str,
+    color: str = "ededed",
+    description: str = "",
+    repo: Optional[str] = None,
+    dry_run: bool = False,
+):
     # Check if label exists
     base = ["gh"]
     if repo:
@@ -42,7 +49,13 @@ def ensure_label(name: str, color: str = "ededed", description: str = "", repo: 
     if res.returncode == 0:
         return
     # Create label
-    cmd = base + ["label", "create", name, "--color", color]
+    cmd = base + [
+        "label",
+        "create",
+        name,
+        "--color",
+        color,
+    ]
     if description:
         cmd += ["--description", description]
     if dry_run:
@@ -51,11 +64,24 @@ def ensure_label(name: str, color: str = "ededed", description: str = "", repo: 
     run(cmd, check=True)
 
 
-def create_issue(title: str, body: str, labels: list[str], repo: Optional[str] = None, dry_run: bool = False):
+def create_issue(
+    title: str,
+    body: str,
+    labels: list[str],
+    repo: Optional[str] = None,
+    dry_run: bool = False,
+):
     cmd = ["gh"]
     if repo:
         cmd += ["--repo", repo]
-    cmd += ["issue", "create", "--title", title, "--body", body]
+    cmd += [
+        "issue",
+        "create",
+        "--title",
+        title,
+        "--body",
+        body,
+    ]
     # Multiple --label flags are supported
     for lbl in labels:
         cmd += ["--label", lbl]
@@ -68,12 +94,22 @@ def create_issue(title: str, body: str, labels: list[str], repo: Optional[str] =
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", help="Target GitHub repo OWNER/NAME", default=None)
-    parser.add_argument("--dry-run", action="store_true", help="Print gh commands without executing")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print gh commands without executing",
+    )
     args = parser.parse_args()
     dry_run = args.dry_run
     repo = args.repo
     if not gh_exists():
-        print("Error: gh CLI not found. Install from https://cli.github.com and run 'gh auth login'.", file=sys.stderr)
+        print(
+            (
+                "Error: gh CLI not found. Install from https://cli.github.com and "
+                "run 'gh auth login'."
+            ),
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     issues_path = Path("tools/issues.json")
