@@ -16,8 +16,10 @@ app.post('/v1/address/:address/sync', async (req, reply) => {
   return { accepted: true }
 })
 
+// start prepares the Fastify app for use (routes/plugins ready) without
+// binding a network socket. Tests and embedded usage call start(); the CLI
+// path below performs the actual listen on 0.0.0.0 for production.
 export async function start() {
-  // Prepare the server without binding a socket; CLI path handles listen.
   await app.ready()
 }
 
