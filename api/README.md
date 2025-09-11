@@ -9,7 +9,7 @@ Build & Test
 - Install: `npm ci`
 - Build: `npm run build` (uses `tsconfig.build.json` and excludes tests)
 - Test (CI/default): `npm test` (runs Vitest with coverage, pool=forks)
-- Test (local fallback): `npx vitest run --coverage --pool=threads` if your environment restricts forking.
+- Test (local fallback): `npm run test:threads` if your environment restricts forking.
 
 ESM Path Rules (NodeNext)
 - Relative imports must include file extensions at runtime. In tests, import compiled files with `.js` extension, e.g. `import { app } from './server.js'`.
@@ -24,4 +24,3 @@ Server Startup Semantics
 
 Notes
 - Coverage thresholds are enforced at 100% in `vitest.config.ts`. If you add new endpoints, ensure tests cover success and error paths or use targeted `/* c8 ignore */` for truly untestable branches.
-
