@@ -82,7 +82,8 @@ func (p *httpProvider) call(ctx context.Context, method string, params interface
                     if err := json.NewDecoder(resp.Body).Decode(&rr); err != nil {
                         lastErr = err
                     } else if rr.Error != nil {
-                        // Treat JSON-RPC errors as non-retriable by default
+                        // Surface JSON-RPC errors; treat as non-retriable by default (HTTP 200)
+                        lastErr = fmt.Errorf("rpc %d: %s", rr.Error.Code, rr.Error.Message)
                         return
                     } else {
                         if out != nil {
