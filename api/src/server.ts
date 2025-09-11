@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import { z } from 'zod'
 import { fileURLToPath } from 'url'
+import { loadConfig } from './config.js'
 
 // Minimal Fastify server scaffold. Final API will expose endpoints for sync,
 // summary, lists, and semantic search.
@@ -26,7 +27,7 @@ export async function start() {
 const isMain = process.argv[1] === fileURLToPath(import.meta.url)
 /* c8 ignore start */
 if (isMain) {
-  const port = Number(process.env.PORT || 3000)
+  const { port } = loadConfig()
   app
     .listen({ port, host: '0.0.0.0' })
     .catch((err) => {
