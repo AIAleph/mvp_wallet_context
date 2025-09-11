@@ -18,15 +18,19 @@ app.post('/v1/address/:address/sync', async (req, reply) => {
 
 export async function start() {
   const port = Number(process.env.PORT || 3000)
-  await app.listen({ port, host: '0.0.0.0' })
+  // Bind to loopback in library mode (tests, imports)
+  await app.listen({ port, host: '127.0.0.1' })
 }
 
 const isMain = process.argv[1] === fileURLToPath(import.meta.url)
 /* c8 ignore start */
 if (isMain) {
-  start().catch((err) => {
-    app.log.error(err)
-    process.exit(1)
-  })
+  const port = Number(process.env.PORT || 3000)
+  app
+    .listen({ port, host: '0.0.0.0' })
+    .catch((err) => {
+      app.log.error(err)
+      process.exit(1)
+    })
 }
 /* c8 ignore stop */
