@@ -19,17 +19,8 @@ describe('API server', () => {
     expect(ok.json()).toEqual({ accepted: true })
   })
 
-  it('start() listens using PORT env and can close', async () => {
-    const prev = process.env.PORT
-    const prevHost = process.env.HOST
-    process.env.PORT = '0'
-    process.env.HOST = '127.0.0.1'
-    try {
-      await start()
-      await app.close()
-    } finally {
-      process.env.PORT = prev
-      process.env.HOST = prevHost
-    }
+  it('start() readies the app and can close', async () => {
+    await start()
+    await app.close()
   })
 })

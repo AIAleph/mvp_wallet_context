@@ -17,9 +17,8 @@ app.post('/v1/address/:address/sync', async (req, reply) => {
 })
 
 export async function start() {
-  const port = Number(process.env.PORT || 3000)
-  // Bind to loopback in library mode (tests, imports)
-  await app.listen({ port, host: '127.0.0.1' })
+  // Prepare the server without binding a socket; CLI path handles listen.
+  await app.ready()
 }
 
 const isMain = process.argv[1] === fileURLToPath(import.meta.url)
