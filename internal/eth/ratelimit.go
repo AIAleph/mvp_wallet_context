@@ -37,6 +37,8 @@ func NewLimiter(rate int) Limiter {
     // Avoid division by zero; cap to 1ns minimum period though realistic rates are low.
     period := time.Second / time.Duration(rate)
     if period <= 0 { period = time.Nanosecond }
-    return qpsLimiter{ch: time.Tick(period)}
+    // Use NewTicker so callers could stop it in extended implementations
+    // (here we expose only the channel; limiter is expected to be long-lived).
+    t := time.NewTicker(period)
+    return qpsLimiter{ch: t.C}
 }
-

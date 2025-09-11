@@ -36,7 +36,7 @@ func TestInsertJSONEachRowEncodesAndSanitizes(t *testing.T) {
     c.hc = &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
         u, _ := url.Parse(r.URL.String())
         gotQuery = u.Query().Get("query")
-        io.Copy(&body, r.Body)
+        if _, err := io.Copy(&body, r.Body); err != nil { t.Fatalf("copy body: %v", err) }
         return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte("ok")))}, nil
     })}
     rows := []any{map[string]any{"a": 1}, map[string]any{"b": 2}}

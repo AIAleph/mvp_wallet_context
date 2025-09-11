@@ -263,7 +263,6 @@ func TestHTTPProvider_CallUnmarshalError(t *testing.T) {
 }
 
 func TestHTTPProvider_GetLogsTopicsVariationsAndTsError(t *testing.T) {
-    calls := 0
     client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
         var req map[string]any
         _ = json.NewDecoder(r.Body).Decode(&req)
@@ -276,9 +275,10 @@ func TestHTTPProvider_GetLogsTopicsVariationsAndTsError(t *testing.T) {
             }}
             return mkResp(logs), nil
         case "eth_getBlockByNumber":
-            // First call returns invalid ts; second returns valid
-            calls++
-            if calls == 1 { return mkResp(map[string]any{"timestamp": "0xzz"}), nil }
+            // Return invalid ts for block 0x10, valid for 0x11 to make outcome deterministic
+            params := req["params"].([]any)
+            blk := params[0].(string)
+            if blk == "0x10" { return mkResp(map[string]any{"timestamp": "0xzz"}), nil }
             return mkResp(map[string]any{"timestamp": "0x64"}), nil
         default:
             return mkResp(nil), nil

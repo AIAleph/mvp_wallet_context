@@ -11,11 +11,6 @@ import (
     "github.com/AIAleph/mvp_wallet_context/internal/eth"
 )
 
-type provHeadOnlyErr struct{}
-func (provHeadOnlyErr) BlockNumber(ctx context.Context) (uint64, error) { return 0, eth.ErrUnsupported }
-func (provHeadOnlyErr) BlockTimestamp(ctx context.Context, block uint64) (int64, error) { return 0, nil }
-func (provHeadOnlyErr) GetLogs(ctx context.Context, address string, from, to uint64, topics [][]string) ([]eth.Log, error) { return nil, nil }
-func (provHeadOnlyErr) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) { return nil, nil }
 
 type provHeadOK struct{ h uint64 }
 func (p provHeadOK) BlockNumber(ctx context.Context) (uint64, error) { return p.h, nil }
