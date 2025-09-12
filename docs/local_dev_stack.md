@@ -40,7 +40,7 @@ Image Pinning
 - To update to a newer version, bump tags temporarily, pull, inspect digests, then replace digests in `docker-compose.yml`.
 
 Healthchecks
-- ClickHouse: `clickhouse-client -q "SELECT 1"` succeeds.
+- ClickHouse: healthcheck runs `SELECT 1` using `CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD` when set (defaults user to `default`).
 - Redis: `redis-cli ping` returns `PONG`.
 Startup Ordering
 - Services are independent; start order does not matter for local development.

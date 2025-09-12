@@ -3,7 +3,8 @@ services:
     image: clickhouse/clickhouse-server@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "clickhouse-client -q 'SELECT 1' >/dev/null 2>&1"]
+      # Use configured credentials if provided; default to user 'default'.
+      test: ["CMD-SHELL", "clickhouse-client --user \"$${CLICKHOUSE_USER:-default}\" $${CLICKHOUSE_PASSWORD:+--password \"$$CLICKHOUSE_PASSWORD\"} -q 'SELECT 1' >/dev/null 2>&1"]
       interval: 5s
       timeout: 3s
       retries: 30
