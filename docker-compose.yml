@@ -1,0 +1,44 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
+    restart: unless-stopped
+    healthcheck:
+      # Use configured credentials if provided; default to user 'default'.
+      test: ["CMD-SHELL", "clickhouse-client --user \"$${CLICKHOUSE_USER:-default}\" $${CLICKHOUSE_PASSWORD:+--password \"$$CLICKHOUSE_PASSWORD\"} -q 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    environment:
+      # Default DB/user/password for local dev; override via .env if desired
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-wallets}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # Native TCP
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - ch_data:/var/lib/clickhouse
+
+  redis:
+    image: redis@sha256:395ccd7ee4db0867de0d0410f4712a9e0331cff9fdbd864f71ec0f7982d3ffe6
+    restart: unless-stopped
+    ports:
+      - "${REDIS_HOST_PORT:-6380}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - redis_data:/data
+
+volumes:
+  ch_data:
+  redis_data:

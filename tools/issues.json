@@ -187,7 +187,7 @@
   {
     "title": "Tooling: docker-compose for ClickHouse (and Redis)",
     "labels": ["tooling", "ops"],
-    "body": "Local dev stack with ClickHouse server and keeper; optional Redis."
+    "body": "Local dev stack with ClickHouse server; optional Redis."
   },
   {
     "title": "Testing: recorded RPC fixtures and CI",
