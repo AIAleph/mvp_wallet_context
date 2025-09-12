@@ -9,6 +9,13 @@ const intFromEnv = (key: string, def: number): number => {
 
 const strFromEnv = (key: string, def = ''): string => process.env[key] ?? def
 
+const boolFromEnv = (key: string, def = false): boolean => {
+  const v = process.env[key]
+  if (!v) return def
+  const s = String(v).toLowerCase()
+  return s === '1' || s === 'true' || s === 'yes' || s === 'on'
+}
+
 // Validate env shape (strings present or undefined)
 const envSchema = z.object({
   PORT: z.string().optional(),
@@ -21,6 +28,7 @@ const envSchema = z.object({
   RATE_LIMIT: z.string().optional(),
   REDIS_URL: z.string().optional(),
   EMBEDDING_MODEL: z.string().optional(),
+  HEALTH_DEBUG: z.string().optional(),
 })
 
 export function loadConfig() {
@@ -40,6 +48,7 @@ export function loadConfig() {
     rateLimit,
     redisUrl: strFromEnv('REDIS_URL', ''),
     embeddingModel: strFromEnv('EMBEDDING_MODEL', ''),
+    healthDebug: boolFromEnv('HEALTH_DEBUG', false),
   }
 }
 

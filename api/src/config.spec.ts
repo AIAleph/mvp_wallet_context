@@ -51,4 +51,16 @@ describe('config env parsing', () => {
     expect(cfg.redisUrl).toContain('redis://')
     expect(cfg.embeddingModel).toBe('text-embedding-3-small')
   })
+
+  it('parses HEALTH_DEBUG boolean variations', async () => {
+    process.env.HEALTH_DEBUG = 'on'
+    let cfg = loadConfig()
+    expect(cfg.healthDebug).toBe(true)
+    process.env.HEALTH_DEBUG = 'off'
+    cfg = loadConfig()
+    expect(cfg.healthDebug).toBe(false)
+    delete process.env.HEALTH_DEBUG
+    cfg = loadConfig()
+    expect(cfg.healthDebug).toBe(false)
+  })
 })

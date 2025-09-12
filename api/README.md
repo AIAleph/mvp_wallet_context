@@ -24,3 +24,12 @@ Server Startup Semantics
 
 Notes
 - Coverage thresholds are enforced at 100% in `vitest.config.ts`. If you add new endpoints, ensure tests cover success and error paths or use targeted `/* c8 ignore */` for truly untestable branches.
+
+Health Endpoints
+- `GET /health`: returns `{ status: 'ok' }`. If ClickHouse is configured via env, the server performs a lightweight `SELECT 1` probe using the HTTP interface, but errors are ignored to keep this endpoint always green.
+- `GET /healthz`: detailed health; only enabled when `HEALTH_DEBUG=1|true|yes|on`. Responds with `{ status: 'ok', clickhouse: { configured, ok, status?, error? } }`.
+
+ClickHouse Config
+- Preferred DSN: set `CLICKHOUSE_DSN` (e.g., `http://user:pass@localhost:8123/wallets`).
+- Or provide parts: `CLICKHOUSE_URL`, `CLICKHOUSE_DB`, optional `CLICKHOUSE_USER`, `CLICKHOUSE_PASS`.
+- The server constructs the DSN for health checks using these values; credentials are not logged.

@@ -23,6 +23,8 @@ type Options struct {
     RedisURL      string // Optional cache endpoint
     DryRun        bool
     Timeout       time.Duration
+    // Schema selects target tables: "dev" (dev_*) or "canonical" (schema.sql tables)
+    Schema        string
 }
 
 // Ingester coordinates fetching, normalization and persistence for a single
@@ -124,20 +126,100 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
             }
         }
     }
-    // Normalize
-    lrows := normalize.LogsToRows(logs)
-    if err := i.ch.InsertJSONEachRow(ctx, "dev_logs", normalize.AsAny(lrows)); err != nil { return err }
-    // Decode token transfers and approvals and write dev tables
-    tTransfers, tApprovals := normalize.DecodeTokenEvents(logs)
-    if len(tTransfers) > 0 {
-        if err := i.ch.InsertJSONEachRow(ctx, "dev_token_transfers", normalize.AsAny(tTransfers)); err != nil { return err }
-    }
-    if len(tApprovals) > 0 {
-        if err := i.ch.InsertJSONEachRow(ctx, "dev_approvals", normalize.AsAny(tApprovals)); err != nil { return err }
-    }
-    if traces != nil {
-        trows := normalize.TracesToRows(traces)
-        if err := i.ch.InsertJSONEachRow(ctx, "dev_traces", normalize.AsAny(trows)); err != nil { return err }
+    // Normalize and write according to schema mode
+    mode := i.SchemaMode()
+    if mode == "canonical" {
+        // Logs
+        lrows := normalize.LogsToRows(logs)
+        if len(lrows) > 0 {
+            rows := make([]any, 0, len(lrows))
+            for _, r := range lrows {
+                rows = append(rows, map[string]any{
+                    "event_uid":    r.EventUID,
+                    "tx_hash":      r.TxHash,
+                    "log_index":    r.LogIndex,
+                    "address":      r.Address,
+                    "topics":       r.Topics,
+                    "data_hex":     r.DataHex,
+                    "block_number": r.BlockNum,
+                    "ts":           fmtDT64(r.TsMillis),
+                })
+            }
+            if err := i.ch.InsertJSONEachRow(ctx, "logs", rows); err != nil { return err }
+        }
+        // Token events
+        tTransfers, tApprovals := normalize.DecodeTokenEvents(logs)
+        if len(tTransfers) > 0 {
+            rows := make([]any, 0, len(tTransfers))
+            for _, r := range tTransfers {
+                rows = append(rows, map[string]any{
+                    "event_uid":    r.EventUID,
+                    "tx_hash":      r.TxHash,
+                    "log_index":    r.LogIndex,
+                    "token":        r.Token,
+                    "from_addr":    r.From,
+                    "to_addr":      r.To,
+                    "amount_raw":   r.AmountRaw,
+                    "token_id":     r.TokenID,
+                    "standard":     r.Standard,
+                    "block_number": r.BlockNum,
+                    "ts":           fmtDT64(r.TsMillis),
+                })
+            }
+            if err := i.ch.InsertJSONEachRow(ctx, "token_transfers", rows); err != nil { return err }
+        }
+        if len(tApprovals) > 0 {
+            rows := make([]any, 0, len(tApprovals))
+            for _, r := range tApprovals {
+                rows = append(rows, map[string]any{
+                    "event_uid":          r.EventUID,
+                    "tx_hash":            r.TxHash,
+                    "log_index":          r.LogIndex,
+                    "token":              r.Token,
+                    "owner":              r.Owner,
+                    "spender":            r.Spender,
+                    "amount_raw":         r.AmountRaw,
+                    "token_id":           r.TokenID,
+                    "is_approval_for_all": r.IsForAll,
+                    "standard":           r.Standard,
+                    "block_number":       r.BlockNum,
+                    "ts":                 fmtDT64(r.TsMillis),
+                })
+            }
+            if err := i.ch.InsertJSONEachRow(ctx, "approvals", rows); err != nil { return err }
+        }
+        if traces != nil && len(traces) > 0 {
+            trows := normalize.TracesToRows(traces)
+            rows := make([]any, 0, len(trows))
+            for _, r := range trows {
+                rows = append(rows, map[string]any{
+                    "trace_uid":    r.TraceUID,
+                    "tx_hash":      r.TxHash,
+                    "trace_id":     r.TraceID,
+                    "from_addr":    r.From,
+                    "to_addr":      r.To,
+                    "value_raw":    r.ValueRaw,
+                    "block_number": r.BlockNum,
+                    "ts":           fmtDT64(r.TsMillis),
+                })
+            }
+            if err := i.ch.InsertJSONEachRow(ctx, "traces", rows); err != nil { return err }
+        }
+    } else {
+        // dev schema (existing behavior)
+        lrows := normalize.LogsToRows(logs)
+        if err := i.ch.InsertJSONEachRow(ctx, "dev_logs", normalize.AsAny(lrows)); err != nil { return err }
+        tTransfers, tApprovals := normalize.DecodeTokenEvents(logs)
+        if len(tTransfers) > 0 {
+            if err := i.ch.InsertJSONEachRow(ctx, "dev_token_transfers", normalize.AsAny(tTransfers)); err != nil { return err }
+        }
+        if len(tApprovals) > 0 {
+            if err := i.ch.InsertJSONEachRow(ctx, "dev_approvals", normalize.AsAny(tApprovals)); err != nil { return err }
+        }
+        if traces != nil {
+            trows := normalize.TracesToRows(traces)
+            if err := i.ch.InsertJSONEachRow(ctx, "dev_traces", normalize.AsAny(trows)); err != nil { return err }
+        }
     }
     return nil
 }
@@ -151,4 +233,26 @@ func (i *Ingester) getBlockTs(ctx context.Context, block uint64) (int64, bool) {
     if err != nil { return 0, false }
     i.tsMu.Lock(); i.tsCache[block] = ts; i.tsMu.Unlock()
     return ts, true
+}
+
+// SchemaMode returns the normalized schema mode (dev or canonical).
+func (i *Ingester) SchemaMode() string {
+    m := i.opts.Schema
+    if m == "" { return "dev" }
+    switch m {
+    case "dev", "canonical":
+        return m
+    default:
+        return "dev"
+    }
+}
+
+// fmtDT64 formats milliseconds since epoch to ClickHouse-compatible DateTime64(3) string (UTC).
+func fmtDT64(ms int64) string {
+    if ms <= 0 { return "1970-01-01 00:00:00.000" }
+    sec := ms / 1000
+    nsec := (ms % 1000) * int64(time.Millisecond)
+    t := time.Unix(sec, nsec).UTC()
+    // 2006-01-02 15:04:05.000
+    return t.Format("2006-01-02 15:04:05.000")
 }

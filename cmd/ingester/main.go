@@ -120,6 +120,7 @@ func main() {
         mode          string
         fromBlock     uint64
         toBlock       uint64
+        schemaMode    string
         confirmations int
         batch         int
         providerURL   string
@@ -138,6 +139,7 @@ func main() {
     flag.Uint64Var(&fromBlock, "from-block", 0, "Start block (0 = auto)")
     flag.Uint64Var(&toBlock, "to-block", 0, "End block (0 = head)")
     flag.IntVar(&confirmations, "confirmations", defaults.SyncConfirmations, "Required confirmations for finality")
+    flag.StringVar(&schemaMode, "schema", "canonical", "Schema: dev | canonical")
     flag.IntVar(&batch, "batch", defaults.BatchBlocks, "Block batch size per request")
     flag.StringVar(&providerURL, "provider", defaults.ProviderURL, "Ethereum RPC provider URL (ETH_PROVIDER_URL)")
     flag.StringVar(&chDSN, "clickhouse", defaults.ClickHouseDSN, "ClickHouse DSN (CLICKHOUSE_DSN or built from CLICKHOUSE_URL/DB/USER/PASS)")
@@ -193,6 +195,7 @@ func main() {
         RedisURL:      redisURL,
         DryRun:        dryRun,
         Timeout:       timeout,
+        Schema:        strings.ToLower(schemaMode),
     }
 
     if dryRun {
@@ -211,6 +214,7 @@ func main() {
             "redis_url":     redisURL,
             "embedding_model": embeddingModel,
             "timeout":       timeout.String(),
+            "schema":        strings.ToLower(schemaMode),
         }
         enc := json.NewEncoder(os.Stdout)
         enc.SetIndent("", "  ")
@@ -244,6 +248,13 @@ func main() {
     if err != nil {
         fmt.Fprintf(os.Stderr, "ingestion error: %v\n", err)
         exit(1)
+    }
+    switch strings.ToLower(schemaMode) {
+    case "dev", "canonical":
+        // ok
+    default:
+        fmt.Fprintf(os.Stderr, "unknown --schema %q (use dev|canonical)\n", schemaMode)
+        exit(2)
     }
     fmt.Println("ok")
 }
