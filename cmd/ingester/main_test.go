@@ -188,6 +188,31 @@ func TestMain_UnknownMode(t *testing.T) {
     })
 }
 
+func TestMain_UnknownSchema(t *testing.T) {
+    withFreshFlags(t, func() {
+        addr := "0x" + strings.Repeat("a", 40)
+        oldArgs := os.Args
+        os.Args = []string{"ingester", "--address", addr, "--schema", "weird"}
+        defer func() { os.Args = oldArgs }()
+        oldExit := exit
+        defer func() { exit = oldExit }()
+        exit = func(code int) { panic(exitPanic{code}) }
+        _, errOut := captureStd(t, func() {
+            defer func() {
+                if r := recover(); r != nil {
+                    if ep, ok := r.(exitPanic); ok && ep.code == 2 { return }
+                    panic(r)
+                }
+                t.Fatalf("expected exit panic")
+            }()
+            main()
+        })
+        if !strings.Contains(errOut, "unknown --schema") {
+            t.Fatalf("stderr = %q", errOut)
+        }
+    })
+}
+
 func TestMain_FromGreaterThanTo(t *testing.T) {
     withFreshFlags(t, func() {
         addr := "0x" + strings.Repeat("a", 40)
