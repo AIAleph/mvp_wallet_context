@@ -5,6 +5,11 @@ Overview
 - Fastify server scaffold with strict Zod validation.
 - Tests via Vitest with v8 coverage and 100% thresholds.
 
+Monitoring
+- `GET /metrics`: Prometheus exposition format with basic counters and gauges.
+  - Counters: `http_requests_total{method,route,status}`
+  - Gauges: `process_resident_memory_bytes`, `process_uptime_seconds`
+
 Build & Test
 - Install: `npm ci`
 - Build: `npm run build` (uses `tsconfig.build.json` and excludes tests)
@@ -41,4 +46,3 @@ Health-related env
 - `HEALTH_PING_TIMEOUT_MS` (default `3000`)
 - `HEALTH_CACHE_TTL_MS` (default `5000`)
 - `HEALTH_RATE_LIMIT_RPS` (default `0`, disabled)
- - Health probe timeout configurable via `HEALTH_PING_TIMEOUT_MS` (milliseconds; default `1000`).

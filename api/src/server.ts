@@ -7,6 +7,40 @@ import { loadConfig } from './config.js'
 // summary, lists, and semantic search.
 export const app = Fastify({ logger: true })
 
+// Prometheus-style metrics (lightweight, no external deps)
+type Counter = Map<string, number>
+const httpRequestsTotal: Counter = new Map()
+const inc = (m: Counter, key: string, v = 1) => m.set(key, (m.get(key) ?? 0) + v)
+const labelKey = (labels: Record<string, string>) =>
+  '{' + Object.entries(labels).map(([k, v]) => `${k}="${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`).join(',') + '}'
+
+app.addHook('onResponse', async (req, reply) => {
+  // Skip counting metrics endpoint itself to avoid recursion
+  /* c8 ignore next */
+  if ((req.url || '').startsWith('/metrics')) return
+  /* c8 ignore next */
+  const route = (req as any).routeOptions?.url || req.url || ''
+  const key = labelKey({ method: req.method, route, status: String(reply.statusCode) })
+  inc(httpRequestsTotal, key)
+})
+
+app.get('/metrics', async (_req, reply) => {
+  const lines: string[] = []
+  lines.push('# HELP http_requests_total Total HTTP requests')
+  lines.push('# TYPE http_requests_total counter')
+  for (const [k, v] of httpRequestsTotal.entries()) {
+    lines.push(`http_requests_total${k} ${v}`)
+  }
+  const mem = process.memoryUsage()
+  lines.push('# HELP process_resident_memory_bytes Resident memory size')
+  lines.push('# TYPE process_resident_memory_bytes gauge')
+  lines.push(`process_resident_memory_bytes ${mem.rss}`)
+  lines.push('# HELP process_uptime_seconds Process uptime in seconds')
+  lines.push('# TYPE process_uptime_seconds gauge')
+  lines.push(`process_uptime_seconds ${process.uptime().toFixed(0)}`)
+  return reply.header('content-type', 'text/plain; version=0.0.4').send(lines.join('\n') + '\n')
+})
+
 // Simple in-memory cache and rate limiter for health endpoints
 let lastHealthPingTs = 0
 let lastHealthzTs = 0
@@ -180,5 +214,17 @@ if (isMain) {
       app.log.error(err)
       process.exit(1)
     })
+  const shutdown = async (sig: string) => {
+    try {
+      app.log.info({ sig }, 'shutting down')
+      await app.close()
+    } catch (e) {
+      app.log.error(e)
+    } finally {
+      process.exit(0)
+    }
+  }
+  process.on('SIGINT', () => shutdown('SIGINT'))
+  process.on('SIGTERM', () => shutdown('SIGTERM'))
 }
 /* c8 ignore stop */

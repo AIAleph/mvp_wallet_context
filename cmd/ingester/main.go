@@ -6,9 +6,11 @@ import (
     "flag"
     "fmt"
     "os"
+    "os/signal"
     "regexp"
     "strconv"
     "strings"
+    "syscall"
     "time"
 
     "github.com/AIAleph/mvp_wallet_context/internal/ingest"
@@ -229,7 +231,10 @@ func main() {
         return
     }
 
-    ctx, cancel := context.WithTimeout(context.Background(), timeout)
+    // Context cancelled on SIGINT/SIGTERM and with timeout
+    baseCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+    defer stop()
+    ctx, cancel := context.WithTimeout(baseCtx, timeout)
     defer cancel()
 
     // If a provider URL is configured, build a provider and inject it. Otherwise

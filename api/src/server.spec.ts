@@ -315,6 +315,21 @@ describe('API server', () => {
     expect(ok.json()).toEqual({ accepted: true })
   })
 
+  it('GET /metrics exposes counters and gauges', async () => {
+    // Hit a couple endpoints to generate counters
+    await app.inject({ method: 'GET', url: '/health' })
+    process.env.HEALTH_DEBUG = '1'
+    await app.inject({ method: 'GET', url: '/healthz' })
+    const res = await app.inject({ method: 'GET', url: '/metrics' })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['content-type']).toContain('text/plain')
+    const body = res.body
+    expect(body).toContain('# TYPE http_requests_total counter')
+    expect(body).toMatch(/http_requests_total\{.*route="\/health".*status="200".*\} \d+/)
+    expect(body).toContain('process_resident_memory_bytes')
+    expect(body).toContain('process_uptime_seconds')
+  })
+
   it('start() readies the app and can close', async () => {
     await start()
     await app.close()
