@@ -8,6 +8,7 @@ set -euo pipefail
 
 cmd="${1:-test}"
 pushd api >/dev/null
+command -v npm >/dev/null 2>&1 || { echo "npm not found in PATH" >&2; exit 1; }
 # Ensure dependencies on first run
 if [[ ! -d node_modules ]]; then
   echo "Installing API dependencies (npm ci)..."

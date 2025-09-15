@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+command -v go >/dev/null 2>&1 || { echo "go not found in PATH" >&2; exit 1; }
+
 # Helper to run the Go ingester for a single address.
 # Usage: scripts/ingest.sh ADDRESS=0x... [MODE=backfill|delta] [FROM=0] [TO=0] [BATCH=5000] [SCHEMA=dev|canonical]
 
