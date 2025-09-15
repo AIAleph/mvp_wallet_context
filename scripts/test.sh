@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+command -v go >/dev/null 2>&1 || { echo "go not found in PATH" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "python3 not found in PATH" >&2; exit 1; }
+command -v npm >/dev/null 2>&1 || { echo "npm not found in PATH" >&2; exit 1; }
+
 echo "[1/3] Go tests + coverage..."
 GOCACHE="$(pwd)/.gocache" GOMODCACHE="$(pwd)/.gocache/mod" GOPATH="$(pwd)/.gocache/gopath" \
   go test -race -covermode=atomic -coverprofile=coverage.out ./...

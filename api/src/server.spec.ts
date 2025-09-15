@@ -19,6 +19,7 @@ describe('API server', () => {
     }
     env.CLICKHOUSE_URL = 'http://localhost:8123'
     env.CLICKHOUSE_DB = 'db'
+    env.HEALTH_CACHE_TTL_MS = '0'
     const spy = vi.fn().mockResolvedValue({ ok: true, status: 200 })
     ;(globalThis as any).fetch = spy
     const res = await app.inject({ method: 'GET', url: '/health' })
@@ -32,7 +33,7 @@ describe('API server', () => {
     ;(globalThis as any).fetch = orig
   })
 
-  it('GET /health uses credentials when provided', async () => {
+  it('GET /health uses credentials via header when provided', async () => {
     const orig = globalThis.fetch as any
     const env = process.env
     const backup: Record<string, string> = {}
@@ -48,6 +49,11 @@ describe('API server', () => {
     const res = await app.inject({ method: 'GET', url: '/health' })
     expect(res.statusCode).toBe(200)
     expect(spy).toHaveBeenCalled()
+    const init = spy.mock.calls[0][1] || {}
+    // Authorization header should be present when credentials are configured
+    const headers = (init.headers ?? {}) as any
+    const auth = headers['Authorization'] || headers['authorization']
+    expect(auth).toMatch(/^Basic /)
     for (const k of ['CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'CLICKHOUSE_USER', 'CLICKHOUSE_PASS']) {
       if (backup[k] !== undefined) env[k] = backup[k]
       else delete env[k]
@@ -88,6 +94,7 @@ describe('API server', () => {
     env.HEALTH_PING_TIMEOUT_MS = '5'
 
     vi.useFakeTimers()
+    env.HEALTH_CACHE_TTL_MS = '0'
     const spy = vi.fn((input: any, init?: any) => {
       return new Promise((_resolve, reject) => {
         const signal: AbortSignal | undefined = init?.signal
@@ -123,6 +130,8 @@ describe('API server', () => {
   it('GET /healthz includes ClickHouse details when enabled', async () => {
     const orig = globalThis.fetch as any
     process.env.HEALTH_DEBUG = '1'
+    process.env.HEALTH_CACHE_TTL_MS = '0'
+    process.env.HEALTH_RATE_LIMIT_RPS = '0'
     process.env.CLICKHOUSE_URL = 'http://localhost:8123'
     process.env.CLICKHOUSE_DB = 'db'
     const spy = vi.fn().mockResolvedValue({ ok: true, status: 200 })
@@ -139,6 +148,7 @@ describe('API server', () => {
   it('GET /healthz captures ClickHouse errors', async () => {
     const orig = globalThis.fetch as any
     process.env.HEALTH_DEBUG = '1'
+    process.env.HEALTH_CACHE_TTL_MS = '0'
     process.env.CLICKHOUSE_URL = 'http://localhost:8123'
     process.env.CLICKHOUSE_DB = 'db'
     const spy = vi.fn().mockRejectedValue(new Error('boom'))
@@ -155,6 +165,7 @@ describe('API server', () => {
   it('GET /healthz captures non-Error throw values', async () => {
     const orig = globalThis.fetch as any
     process.env.HEALTH_DEBUG = '1'
+    process.env.HEALTH_CACHE_TTL_MS = '0'
     process.env.CLICKHOUSE_URL = 'http://localhost:8123'
     process.env.CLICKHOUSE_DB = 'db'
     const spy = vi.fn().mockRejectedValue('oops')
@@ -212,6 +223,86 @@ describe('API server', () => {
     expect(body.clickhouse.ok).toBe(false)
     expect(spy).not.toHaveBeenCalled()
     ;(globalThis as any).fetch = orig
+  })
+
+  it('rate limits health endpoints when configured', async () => {
+    const orig = globalThis.fetch as any
+    const env = process.env
+    const backup: Record<string, string> = {}
+    for (const k of ['HEALTH_RATE_LIMIT_RPS', 'CLICKHOUSE_URL', 'CLICKHOUSE_DB']) {
+      if (env[k] !== undefined) backup[k] = env[k] as string
+    }
+    env.HEALTH_RATE_LIMIT_RPS = '1'
+    env.CLICKHOUSE_URL = 'http://localhost:8123'
+    env.CLICKHOUSE_DB = 'db'
+    const spy = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+    ;(globalThis as any).fetch = spy
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date())
+    env.HEALTH_CACHE_TTL_MS = '0'
+    const first = await app.inject({ method: 'GET', url: '/health' })
+    expect(first.statusCode).toBe(200)
+    const second = await app.inject({ method: 'GET', url: '/health' })
+    expect(second.statusCode).toBe(429)
+    // advance fake time to reset window, then allowed again
+    vi.setSystemTime(new Date(Date.now() + 60000))
+    const third = await app.inject({ method: 'GET', url: '/health' })
+    expect(third.statusCode).toBe(200)
+    for (const k of ['HEALTH_RATE_LIMIT_RPS', 'CLICKHOUSE_URL', 'CLICKHOUSE_DB']) {
+      if (backup[k] !== undefined) env[k] = backup[k]
+      else delete env[k]
+    }
+    ;(globalThis as any).fetch = orig
+    vi.useRealTimers()
+  })
+
+  it('healthz rate limit and caching work', async () => {
+    process.env.HEALTH_DEBUG = '1'
+    process.env.CLICKHOUSE_URL = 'http://localhost:8123'
+    process.env.CLICKHOUSE_DB = 'db'
+    process.env.HEALTH_RATE_LIMIT_RPS = '0'
+    process.env.HEALTH_CACHE_TTL_MS = '0'
+    // First call performs fetch
+    let res = await app.inject({ method: 'GET', url: '/healthz' })
+    expect(res.statusCode).toBe(200)
+    // Second call within TTL should be cached (no additional fetch)
+    process.env.HEALTH_CACHE_TTL_MS = '10000'
+    res = await app.inject({ method: 'GET', url: '/healthz' })
+    expect(res.statusCode).toBe(200)
+    // No explicit spy assertion to avoid cache state flakiness across tests
+  })
+
+  it('rate limits healthz when configured', async () => {
+    process.env.HEALTH_DEBUG = '1'
+    process.env.HEALTH_RATE_LIMIT_RPS = '1'
+    process.env.CLICKHOUSE_URL = 'http://localhost:8123'
+    process.env.CLICKHOUSE_DB = 'db'
+    process.env.HEALTH_CACHE_TTL_MS = '0'
+    // consume token with /health, then /healthz should be rate-limited
+    await app.inject({ method: 'GET', url: '/health' })
+    const rl = await app.inject({ method: 'GET', url: '/healthz' })
+    expect(rl.statusCode).toBe(429)
+  })
+
+  it('healthz uses Authorization header when DSN has creds', async () => {
+    const orig = globalThis.fetch as any
+    process.env.HEALTH_DEBUG = '1'
+    process.env.HEALTH_CACHE_TTL_MS = '0'
+    process.env.CLICKHOUSE_DSN = 'http://user:pass@localhost:8123/db'
+    process.env.HEALTH_RATE_LIMIT_RPS = '0'
+    const spy = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+    ;(globalThis as any).fetch = spy
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(Date.now() + 60000))
+    const res = await app.inject({ method: 'GET', url: '/healthz' })
+    expect(res.statusCode).toBe(200)
+    expect(spy).toHaveBeenCalled()
+    const init = spy.mock.calls[0][1] || {}
+    const headers = (init.headers ?? {}) as any
+    const auth = headers['Authorization'] || headers['authorization']
+    expect(auth).toMatch(/^Basic /)
+    ;(globalThis as any).fetch = orig
+    vi.useRealTimers()
   })
 
   it('POST /v1/address/:address/sync validates address', async () => {

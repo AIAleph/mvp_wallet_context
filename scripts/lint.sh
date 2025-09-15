@@ -23,4 +23,12 @@ fi
 npm run --silent build
 popd >/dev/null
 
+# Shell scripts lint (shellcheck)...
+if command -v shellcheck >/dev/null 2>&1; then
+  echo "Shell lint (shellcheck)..."
+  shellcheck scripts/*.sh
+else
+  echo "shellcheck not installed; skipping"
+fi
+
 echo "Lint completed."

@@ -30,6 +30,8 @@ const envSchema = z.object({
   EMBEDDING_MODEL: z.string().optional(),
   HEALTH_DEBUG: z.string().optional(),
   HEALTH_PING_TIMEOUT_MS: z.string().optional(),
+  HEALTH_CACHE_TTL_MS: z.string().optional(),
+  HEALTH_RATE_LIMIT_RPS: z.string().optional(),
 })
 
 export function loadConfig() {
@@ -50,7 +52,10 @@ export function loadConfig() {
     redisUrl: strFromEnv('REDIS_URL', ''),
     embeddingModel: strFromEnv('EMBEDDING_MODEL', ''),
     healthDebug: boolFromEnv('HEALTH_DEBUG', false),
-    healthPingTimeoutMs: intFromEnv('HEALTH_PING_TIMEOUT_MS', 1000),
+    // Slightly higher default for remote CH instances
+    healthPingTimeoutMs: intFromEnv('HEALTH_PING_TIMEOUT_MS', 3000),
+    healthCacheTtlMs: intFromEnv('HEALTH_CACHE_TTL_MS', 5000),
+    healthRateLimitRps: intFromEnv('HEALTH_RATE_LIMIT_RPS', 0),
   }
 }
 

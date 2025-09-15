@@ -108,9 +108,9 @@ func (i *Ingester) Delta(ctx context.Context) error {
 func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
     // Topics nil for now; later pass selectors for token transfers/approvals
     logs, err := i.prov.GetLogs(ctx, i.address, from, to, nil)
-    if err != nil { return err }
+    if err != nil { return fmt.Errorf("getting logs: %w", err) }
     traces, err := i.prov.TraceBlock(ctx, from, to, i.address)
-    if err != nil && err != eth.ErrUnsupported { return err }
+    if err != nil && err != eth.ErrUnsupported { return fmt.Errorf("tracing blocks: %w", err) }
     // Fill timestamps if missing using in-process cache + provider
     for idx := range logs {
         if logs[idx].TsMillis == 0 {
@@ -145,7 +145,7 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
                     "ts":           fmtDT64(r.TsMillis),
                 })
             }
-            if err := i.ch.InsertJSONEachRow(ctx, "logs", rows); err != nil { return err }
+            if err := i.ch.InsertJSONEachRow(ctx, "logs", rows); err != nil { return fmt.Errorf("inserting logs: %w", err) }
         }
         // Token events
         tTransfers, tApprovals := normalize.DecodeTokenEvents(logs)
@@ -166,7 +166,7 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
                     "ts":           fmtDT64(r.TsMillis),
                 })
             }
-            if err := i.ch.InsertJSONEachRow(ctx, "token_transfers", rows); err != nil { return err }
+            if err := i.ch.InsertJSONEachRow(ctx, "token_transfers", rows); err != nil { return fmt.Errorf("inserting token_transfers: %w", err) }
         }
         if len(tApprovals) > 0 {
             rows := make([]any, 0, len(tApprovals))
@@ -186,7 +186,7 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
                     "ts":                 fmtDT64(r.TsMillis),
                 })
             }
-            if err := i.ch.InsertJSONEachRow(ctx, "approvals", rows); err != nil { return err }
+            if err := i.ch.InsertJSONEachRow(ctx, "approvals", rows); err != nil { return fmt.Errorf("inserting approvals: %w", err) }
         }
         if len(traces) > 0 {
             trows := normalize.TracesToRows(traces)
@@ -203,22 +203,22 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
                     "ts":           fmtDT64(r.TsMillis),
                 })
             }
-            if err := i.ch.InsertJSONEachRow(ctx, "traces", rows); err != nil { return err }
+            if err := i.ch.InsertJSONEachRow(ctx, "traces", rows); err != nil { return fmt.Errorf("inserting traces: %w", err) }
         }
     } else {
         // dev schema (existing behavior)
         lrows := normalize.LogsToRows(logs)
-        if err := i.ch.InsertJSONEachRow(ctx, "dev_logs", normalize.AsAny(lrows)); err != nil { return err }
+        if err := i.ch.InsertJSONEachRow(ctx, "dev_logs", normalize.AsAny(lrows)); err != nil { return fmt.Errorf("inserting dev_logs: %w", err) }
         tTransfers, tApprovals := normalize.DecodeTokenEvents(logs)
         if len(tTransfers) > 0 {
-            if err := i.ch.InsertJSONEachRow(ctx, "dev_token_transfers", normalize.AsAny(tTransfers)); err != nil { return err }
+            if err := i.ch.InsertJSONEachRow(ctx, "dev_token_transfers", normalize.AsAny(tTransfers)); err != nil { return fmt.Errorf("inserting dev_token_transfers: %w", err) }
         }
         if len(tApprovals) > 0 {
-            if err := i.ch.InsertJSONEachRow(ctx, "dev_approvals", normalize.AsAny(tApprovals)); err != nil { return err }
+            if err := i.ch.InsertJSONEachRow(ctx, "dev_approvals", normalize.AsAny(tApprovals)); err != nil { return fmt.Errorf("inserting dev_approvals: %w", err) }
         }
         if traces != nil {
             trows := normalize.TracesToRows(traces)
-            if err := i.ch.InsertJSONEachRow(ctx, "dev_traces", normalize.AsAny(trows)); err != nil { return err }
+            if err := i.ch.InsertJSONEachRow(ctx, "dev_traces", normalize.AsAny(trows)); err != nil { return fmt.Errorf("inserting dev_traces: %w", err) }
         }
     }
     return nil

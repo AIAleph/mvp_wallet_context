@@ -183,6 +183,13 @@ func main() {
         fmt.Fprintln(os.Stderr, "--batch must be > 0")
         exit(2)
     }
+    switch strings.ToLower(schemaMode) {
+    case "dev", "canonical":
+        // ok
+    default:
+        fmt.Fprintf(os.Stderr, "unknown --schema %q (use dev|canonical)\n", schemaMode)
+        exit(2)
+    }
 
     opts := ingest.Options{
         ProviderURL:   providerURL,
@@ -248,13 +255,6 @@ func main() {
     if err != nil {
         fmt.Fprintf(os.Stderr, "ingestion error: %v\n", err)
         exit(1)
-    }
-    switch strings.ToLower(schemaMode) {
-    case "dev", "canonical":
-        // ok
-    default:
-        fmt.Fprintf(os.Stderr, "unknown --schema %q (use dev|canonical)\n", schemaMode)
-        exit(2)
     }
     fmt.Println("ok")
 }

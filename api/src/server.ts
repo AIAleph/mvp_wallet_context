@@ -7,22 +7,61 @@ import { loadConfig } from './config.js'
 // summary, lists, and semantic search.
 export const app = Fastify({ logger: true })
 
-app.get('/health', async () => {
+// Simple in-memory cache and rate limiter for health endpoints
+let lastHealthPingTs = 0
+let lastHealthzTs = 0
+let lastHealthzPayload: { status: 'ok'; clickhouse: ClickHouseHealth } | null = null
+
+type ClickHouseHealth = {
+  configured: boolean
+  ok: boolean
+  status?: number
+  error?: string
+}
+
+// Basic token-bucket limiter (global) to avoid dependency
+const healthLimiter = (() => {
+  let windowStart = Date.now()
+  let count = 0
+  return (rate: number): boolean => {
+    if (rate <= 0) return true
+    const now = Date.now()
+    if (now - windowStart >= 1000) {
+      windowStart = now
+      count = 0
+    }
+    if (count < rate) {
+      count += 1
+      return true
+    }
+    return false
+  }
+})()
+
+app.get('/health', async (req, reply) => {
+  const cfg = loadConfig()
+  if (!healthLimiter(cfg.healthRateLimitRps)) {
+    return reply.code(429).send({ error: 'rate limited' })
+  }
   // Lightweight ClickHouse health check: only if configured; ignore errors.
   try {
-    const cfg = loadConfig()
     const dsn = buildClickHouseDSN(cfg)
     if (dsn) {
-      const u = new URL(dsn)
-      const q = new URLSearchParams(u.search)
-      q.set('query', 'SELECT 1')
-      u.search = q.toString()
-      const ctrl = new AbortController()
-      const timer = setTimeout(() => ctrl.abort(), cfg.healthPingTimeoutMs)
-      try {
-        await fetch(u, { method: 'GET', signal: ctrl.signal })
-      } finally {
-        clearTimeout(timer)
+      const now = Date.now()
+      if (now - lastHealthPingTs >= cfg.healthCacheTtlMs) {
+        const { url, authHeader } = sanitizeDSNForRequest(dsn, cfg)
+        const u = new URL(url)
+        const q = new URLSearchParams(u.search)
+        q.set('query', 'SELECT 1')
+        u.search = q.toString()
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), cfg.healthPingTimeoutMs)
+        try {
+          await fetch(u, { method: 'GET', signal: ctrl.signal, headers: authHeader ? { Authorization: authHeader } : undefined })
+        } finally {
+          clearTimeout(timer)
+          lastHealthPingTs = now
+        }
       }
     }
   } catch {
@@ -34,21 +73,29 @@ app.get('/health', async () => {
 // Detailed health endpoint (guarded by HEALTH_DEBUG). Returns ClickHouse details.
 app.get('/healthz', async (req, reply) => {
   const cfg = loadConfig()
+  if (!healthLimiter(cfg.healthRateLimitRps)) {
+    return reply.code(429).send({ error: 'rate limited' })
+  }
   if (!cfg.healthDebug) {
     return reply.code(404).send({ error: 'not found' })
   }
   const dsn = buildClickHouseDSN(cfg)
-  let ch: any = { configured: !!dsn, ok: false as boolean }
+  let ch: ClickHouseHealth = { configured: !!dsn, ok: false }
   if (dsn) {
+    const now = Date.now()
+    if (lastHealthzPayload && now - lastHealthzTs < cfg.healthCacheTtlMs) {
+      return lastHealthzPayload
+    }
     try {
-      const u = new URL(dsn)
+      const { url, authHeader } = sanitizeDSNForRequest(dsn, cfg)
+      const u = new URL(url)
       const q = new URLSearchParams(u.search)
       q.set('query', 'SELECT 1')
       u.search = q.toString()
       const ctrl = new AbortController()
       const timer = setTimeout(() => ctrl.abort(), cfg.healthPingTimeoutMs)
       try {
-        const r = await fetch(u, { method: 'GET', signal: ctrl.signal })
+        const r = await fetch(u, { method: 'GET', signal: ctrl.signal, headers: authHeader ? { Authorization: authHeader } : undefined })
         ch.ok = r.ok
         ch.status = r.status
       } finally {
@@ -58,6 +105,8 @@ app.get('/healthz', async (req, reply) => {
       ch.ok = false
       ch.error = String(e?.message || e)
     }
+    lastHealthzPayload = { status: 'ok', clickhouse: ch }
+    lastHealthzTs = Date.now()
   }
   return { status: 'ok', clickhouse: ch }
 })
@@ -71,18 +120,37 @@ function buildClickHouseDSN(cfg: ReturnType<typeof loadConfig>): string {
   if (!base || !db) return ''
   try {
     const u = new URL(base)
-    if (cfg.clickhouse.user || cfg.clickhouse.pass) {
-      const user = cfg.clickhouse.user ?? ''
-      const pass = cfg.clickhouse.pass ?? ''
-      u.username = user
-      u.password = pass
-    }
+    // Avoid embedding credentials in URL for security; use Authorization header instead
+    u.username = ''
+    u.password = ''
     const p = u.pathname.replace(/\/+$/, '')
     u.pathname = p.endsWith('/' + db) ? p : p + '/' + db
     return u.toString()
   } catch {
     const p = base.replace(/\/+$/, '')
     return p + '/' + db
+  }
+}
+
+// Extract Basic auth header from DSN credentials, but return URL without creds
+function sanitizeDSNForRequest(dsn: string, cfg: ReturnType<typeof loadConfig>): { url: string; authHeader?: string } {
+  try {
+    const u = new URL(dsn)
+    let authHeader: string | undefined
+    if (u.username || u.password) {
+      const raw = `${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`
+      const b64 = Buffer.from(raw).toString('base64')
+      authHeader = `Basic ${b64}`
+      u.username = ''
+      u.password = ''
+    } else if (cfg.clickhouse.user || cfg.clickhouse.pass) {
+      const raw = `${cfg.clickhouse.user}:${cfg.clickhouse.pass}`
+      const b64 = Buffer.from(raw).toString('base64')
+      authHeader = `Basic ${b64}`
+    }
+    return { url: u.toString(), authHeader }
+  } catch {
+    return { url: dsn }
   }
 }
 /* c8 ignore stop */
