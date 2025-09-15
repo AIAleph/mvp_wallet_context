@@ -188,7 +188,7 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
             }
             if err := i.ch.InsertJSONEachRow(ctx, "approvals", rows); err != nil { return err }
         }
-        if traces != nil && len(traces) > 0 {
+        if len(traces) > 0 {
             trows := normalize.TracesToRows(traces)
             rows := make([]any, 0, len(trows))
             for _, r := range trows {
