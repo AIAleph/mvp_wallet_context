@@ -16,6 +16,12 @@ if [[ -z "${SCHEMA_FILE}" ]]; then
   fi
 fi
 
+# Validate schema file exists unless explicitly disabled
+if [[ "${SCHEMA_FILE}" != "/dev/null" && ! -f "${SCHEMA_FILE}" ]]; then
+  echo "Error: schema file not found: ${SCHEMA_FILE}" >&2
+  exit 1
+fi
+
 echo "Ensuring database exists: ${CH_DB}"
 if command -v clickhouse-client >/dev/null 2>&1; then
   clickhouse-client -q "CREATE DATABASE IF NOT EXISTS ${CH_DB}"

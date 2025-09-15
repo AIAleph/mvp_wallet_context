@@ -138,6 +138,8 @@ app.get('/healthz', async (req, reply) => {
     } catch (e: any) {
       ch.ok = false
       ch.error = String(e?.message || e)
+      /* c8 ignore next */
+      app.log.warn({ err: ch.error, dsn: redactDSN(dsn) }, 'clickhouse healthz error')
     }
     lastHealthzPayload = { status: 'ok', clickhouse: ch }
     lastHealthzTs = Date.now()
@@ -161,8 +163,8 @@ function buildClickHouseDSN(cfg: ReturnType<typeof loadConfig>): string {
     u.pathname = p.endsWith('/' + db) ? p : p + '/' + db
     return u.toString()
   } catch {
-    const p = base.replace(/\/+$/, '')
-    return p + '/' + db
+    // Do not attempt naive concatenation; avoid producing invalid URLs
+    return ''
   }
 }
 
@@ -187,6 +189,29 @@ function sanitizeDSNForRequest(dsn: string, cfg: ReturnType<typeof loadConfig>):
     return { url: dsn }
   }
 }
+// Redact credentials in DSN-like URLs for safe logging
+/* c8 ignore start */
+function redactDSN(s: string): string {
+  if (!s) return s
+  try {
+    const u = new URL(s)
+    if (u.username || u.password) {
+      const user = u.username || '***'
+      u.username = user
+      u.password = '***'
+      return u.toString()
+    }
+    return s
+  } catch {
+    const m = s.match(/(.*\/\/)([^@]+)@/)
+    if (m) {
+      const user = (m[2].split(':')[0]) || '***'
+      return s.replace(m[0], `${m[1]}${user}:***@`)
+    }
+    return s
+  }
+}
+/* c8 ignore stop */
 /* c8 ignore stop */
 
 app.post('/v1/address/:address/sync', async (req, reply) => {

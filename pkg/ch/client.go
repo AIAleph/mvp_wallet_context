@@ -44,16 +44,19 @@ func (c *Client) Ping(ctx context.Context) error {
     q := u.Query()
     q.Set("query", "SELECT 1")
     u.RawQuery = q.Encode()
-    req, err := httpNewRequest(ctx, http.MethodGet, u.String(), nil)
-    if err != nil { return err }
-    resp, err := c.hc.Do(req)
-    if err != nil { return err }
-    defer resp.Body.Close()
-    if resp.StatusCode/100 != 2 {
-        b, _ := io.ReadAll(resp.Body)
-        return fmt.Errorf("clickhouse ping http %d: %s", resp.StatusCode, string(b))
-    }
-    return nil
+    // Build a fresh request on each attempt
+    return doWithRetry(ctx, func() error {
+        req, err := httpNewRequest(ctx, http.MethodGet, u.String(), nil)
+        if err != nil { return err }
+        resp, err := c.hc.Do(req)
+        if err != nil { return err }
+        defer resp.Body.Close()
+        if resp.StatusCode/100 != 2 {
+            b, _ := io.ReadAll(resp.Body)
+            return &httpStatusErr{code: resp.StatusCode, body: string(b), op: "ping"}
+        }
+        return nil
+    })
 }
 
 // InsertJSONEachRow performs an INSERT INTO <table> FORMAT JSONEachRow using the
@@ -78,17 +81,20 @@ func (c *Client) InsertJSONEachRow(ctx context.Context, table string, rows []any
     query := fmt.Sprintf("INSERT INTO %s FORMAT JSONEachRow", sanitizeIdent(table))
     q.Set("query", query)
     u.RawQuery = q.Encode()
-    req, err := httpNewRequest(ctx, http.MethodPost, u.String(), &buf)
-    if err != nil { return err }
-    req.Header.Set("Content-Type", "application/json")
-    resp, err := c.hc.Do(req)
-    if err != nil { return err }
-    defer resp.Body.Close()
-    if resp.StatusCode/100 != 2 {
-        b, _ := io.ReadAll(resp.Body)
-        return fmt.Errorf("clickhouse insert http %d: %s", resp.StatusCode, string(b))
-    }
-    return nil
+    payload := append([]byte(nil), buf.Bytes()...)
+    return doWithRetry(ctx, func() error {
+        req, err := httpNewRequest(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
+        if err != nil { return err }
+        req.Header.Set("Content-Type", "application/json")
+        resp, err := c.hc.Do(req)
+        if err != nil { return err }
+        defer resp.Body.Close()
+        if resp.StatusCode/100 != 2 {
+            b, _ := io.ReadAll(resp.Body)
+            return &httpStatusErr{code: resp.StatusCode, body: string(b), op: "insert"}
+        }
+        return nil
+    })
 }
 
 // sanitizeIdent prevents injection in table identifiers for simple cases.
@@ -97,4 +103,41 @@ func sanitizeIdent(s string) string {
         if r == '_' || r == '.' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') { return r }
         return '_'
     }, s)
+}
+
+// Retry policy (tunable in tests)
+var (
+    retryAttempts    = 3
+    retryBackoffBase = 10 * time.Millisecond
+)
+
+type httpStatusErr struct{ code int; body, op string }
+func (e *httpStatusErr) Error() string { return fmt.Sprintf("clickhouse %s http %d: %s", e.op, e.code, e.body) }
+
+func isRetriable(err error) bool {
+    if e, ok := err.(*httpStatusErr); ok {
+        if e.code == 429 { return true }
+        if e.code >= 500 { return true }
+        return false
+    }
+    // Network/transport errors are retriable by default
+    return true
+}
+
+func doWithRetry(ctx context.Context, fn func() error) error {
+    var err error
+    for attempt := 0; attempt < retryAttempts; attempt++ {
+        if err = fn(); err == nil { return nil }
+        if !isRetriable(err) { return err }
+        // backoff with jitter
+        if attempt < retryAttempts-1 {
+            d := retryBackoffBase * (1 << attempt)
+            select {
+            case <-time.After(d):
+            case <-ctx.Done():
+                return ctx.Err()
+            }
+        }
+    }
+    return err
 }

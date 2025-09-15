@@ -12,7 +12,10 @@ command -v npm >/dev/null 2>&1 || { echo "npm not found in PATH" >&2; exit 1; }
 # Ensure dependencies on first run
 if [[ ! -d node_modules ]]; then
   echo "Installing API dependencies (npm ci)..."
-  npm ci
+  if ! npm ci; then
+    echo "npm ci failed or lockfile missing; falling back to npm install"
+    npm install
+  fi
 fi
 case "${cmd}" in
   dev)
