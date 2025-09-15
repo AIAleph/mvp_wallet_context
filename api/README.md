@@ -28,8 +28,10 @@ Notes
 Health Endpoints
 - `GET /health`: returns `{ status: 'ok' }`. If ClickHouse is configured via env, the server performs a lightweight `SELECT 1` probe using the HTTP interface, but errors are ignored to keep this endpoint always green.
 - `GET /healthz`: detailed health; only enabled when `HEALTH_DEBUG=1|true|yes|on`. Responds with `{ status: 'ok', clickhouse: { configured, ok, status?, error? } }`.
+ - Timeout: ClickHouse pings use `HEALTH_PING_TIMEOUT_MS` (default `1000`) to avoid hanging when the host is unreachable.
 
 ClickHouse Config
 - Preferred DSN: set `CLICKHOUSE_DSN` (e.g., `http://user:pass@localhost:8123/wallets`).
 - Or provide parts: `CLICKHOUSE_URL`, `CLICKHOUSE_DB`, optional `CLICKHOUSE_USER`, `CLICKHOUSE_PASS`.
 - The server constructs the DSN for health checks using these values; credentials are not logged.
+ - Health probe timeout configurable via `HEALTH_PING_TIMEOUT_MS` (milliseconds; default `1000`).

@@ -17,7 +17,13 @@ app.get('/health', async () => {
       const q = new URLSearchParams(u.search)
       q.set('query', 'SELECT 1')
       u.search = q.toString()
-      await fetch(u, { method: 'GET' })
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), cfg.healthPingTimeoutMs)
+      try {
+        await fetch(u, { method: 'GET', signal: ctrl.signal })
+      } finally {
+        clearTimeout(timer)
+      }
     }
   } catch {
     // ignore
@@ -39,9 +45,15 @@ app.get('/healthz', async (req, reply) => {
       const q = new URLSearchParams(u.search)
       q.set('query', 'SELECT 1')
       u.search = q.toString()
-      const r = await fetch(u, { method: 'GET' })
-      ch.ok = r.ok
-      ch.status = r.status
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), cfg.healthPingTimeoutMs)
+      try {
+        const r = await fetch(u, { method: 'GET', signal: ctrl.signal })
+        ch.ok = r.ok
+        ch.status = r.status
+      } finally {
+        clearTimeout(timer)
+      }
     } catch (e: any) {
       ch.ok = false
       ch.error = String(e?.message || e)

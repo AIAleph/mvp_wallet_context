@@ -29,6 +29,7 @@ const envSchema = z.object({
   REDIS_URL: z.string().optional(),
   EMBEDDING_MODEL: z.string().optional(),
   HEALTH_DEBUG: z.string().optional(),
+  HEALTH_PING_TIMEOUT_MS: z.string().optional(),
 })
 
 export function loadConfig() {
@@ -49,6 +50,7 @@ export function loadConfig() {
     redisUrl: strFromEnv('REDIS_URL', ''),
     embeddingModel: strFromEnv('EMBEDDING_MODEL', ''),
     healthDebug: boolFromEnv('HEALTH_DEBUG', false),
+    healthPingTimeoutMs: intFromEnv('HEALTH_PING_TIMEOUT_MS', 1000),
   }
 }
 

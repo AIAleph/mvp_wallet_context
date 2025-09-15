@@ -76,6 +76,44 @@ describe('API server', () => {
     ;(globalThis as any).fetch = orig
   })
 
+  it('GET /health aborts ClickHouse ping on timeout', async () => {
+    const origFetch = globalThis.fetch as any
+    const env = process.env
+    const backup: Record<string, string> = {}
+    for (const k of ['CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_PING_TIMEOUT_MS']) {
+      if (env[k] !== undefined) backup[k] = env[k] as string
+    }
+    env.CLICKHOUSE_URL = 'http://localhost:8123'
+    env.CLICKHOUSE_DB = 'db'
+    env.HEALTH_PING_TIMEOUT_MS = '5'
+
+    vi.useFakeTimers()
+    const spy = vi.fn((input: any, init?: any) => {
+      return new Promise((_resolve, reject) => {
+        const signal: AbortSignal | undefined = init?.signal
+        if (signal?.aborted) return reject(new Error('aborted'))
+        signal?.addEventListener('abort', () => reject(new Error('aborted')))
+      })
+    })
+    ;(globalThis as any).fetch = spy
+
+    const p = app.inject({ method: 'GET', url: '/health' })
+    await vi.advanceTimersByTimeAsync(5)
+    const res = await p
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ status: 'ok' })
+    expect(spy).toHaveBeenCalled()
+    const init = spy.mock.calls[0][1]
+    expect(init?.signal?.aborted).toBe(true)
+
+    vi.useRealTimers()
+    for (const k of ['CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_PING_TIMEOUT_MS']) {
+      if (backup[k] !== undefined) env[k] = backup[k]
+      else delete env[k]
+    }
+    ;(globalThis as any).fetch = origFetch
+  })
+
   it('GET /healthz returns 404 when debug disabled', async () => {
     delete process.env.HEALTH_DEBUG
     const res = await app.inject({ method: 'GET', url: '/healthz' })
@@ -127,6 +165,37 @@ describe('API server', () => {
     expect(body.clickhouse.ok).toBe(false)
     expect(String(body.clickhouse.error)).toContain('oops')
     ;(globalThis as any).fetch = orig
+  })
+
+  it('GET /healthz aborts and reports timeout error', async () => {
+    const origFetch = globalThis.fetch as any
+    process.env.HEALTH_DEBUG = '1'
+    process.env.CLICKHOUSE_URL = 'http://localhost:8123'
+    process.env.CLICKHOUSE_DB = 'db'
+    process.env.HEALTH_PING_TIMEOUT_MS = '5'
+
+    vi.useFakeTimers()
+    const spy = vi.fn((_input: any, init?: any) => {
+      return new Promise((_resolve, reject) => {
+        const signal: AbortSignal | undefined = init?.signal
+        if (signal?.aborted) return reject(new Error('aborted'))
+        signal?.addEventListener('abort', () => reject(new Error('aborted')))
+      })
+    })
+    ;(globalThis as any).fetch = spy
+
+    const p = app.inject({ method: 'GET', url: '/healthz' })
+    await vi.advanceTimersByTimeAsync(5)
+    const res = await p
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as any
+    expect(body.clickhouse.configured).toBe(true)
+    expect(body.clickhouse.ok).toBe(false)
+    expect(String(body.clickhouse.error)).toContain('aborted')
+    expect(spy).toHaveBeenCalled()
+
+    vi.useRealTimers()
+    ;(globalThis as any).fetch = origFetch
   })
 
   it('GET /healthz with debug enabled but CH not configured', async () => {
