@@ -32,7 +32,35 @@ Notes
 
 Health Endpoints
 - `GET /health`: returns `{ status: 'ok' }`. If ClickHouse is configured via env, the server performs a lightweight `SELECT 1` probe using the HTTP interface, but errors are ignored to keep this endpoint always green.
+  Example:
+  ```json
+  {
+    "status": "ok"
+  }
+  ```
 - `GET /healthz`: detailed health; only enabled when `HEALTH_DEBUG=1|true|yes|on`. Responds with `{ status: 'ok', clickhouse: { configured, ok, status?, error? } }`.
+  Example (healthy):
+  ```json
+  {
+    "status": "ok",
+    "clickhouse": {
+      "configured": true,
+      "ok": true,
+      "status": "reachable"
+    }
+  }
+  ```
+  Example (degraded):
+  ```json
+  {
+    "status": "error",
+    "clickhouse": {
+      "configured": true,
+      "ok": false,
+      "error": "connection refused"
+    }
+  }
+  ```
  - Timeout: ClickHouse pings use `HEALTH_PING_TIMEOUT_MS` (default `3000`) to avoid hanging when the host is unreachable.
  - Rate limit: set `HEALTH_RATE_LIMIT_RPS` to limit requests per second (default `0` disables limiting).
  - Caching: health checks are cached for `HEALTH_CACHE_TTL_MS` (default `5000`), avoiding repeated work under load.

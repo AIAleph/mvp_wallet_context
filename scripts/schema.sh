@@ -5,6 +5,25 @@ set -euo pipefail
 # otherwise attempts docker compose exec into the clickhouse service.
 
 CH_DB="${CLICKHOUSE_DB:-${CH_DB:-wallets}}"
+CH_USER="${CLICKHOUSE_USER:-${CH_USER:-}}"
+# Prefer CLICKHOUSE_PASS but fall back to CLICKHOUSE_PASSWORD for compatibility.
+CH_PASS="${CLICKHOUSE_PASS:-${CLICKHOUSE_PASSWORD:-${CH_PASS:-}}}"
+CH_CLIENT_FLAGS=()
+if [[ -n "${CH_USER}" ]]; then
+  CH_CLIENT_FLAGS+=(--user "${CH_USER}")
+fi
+if [[ -n "${CH_PASS}" ]]; then
+  CH_CLIENT_FLAGS+=(--password "${CH_PASS}")
+fi
+
+run_clickhouse() {
+  local cmd=(clickhouse-client)
+  if ((${#CH_CLIENT_FLAGS[@]})); then
+    cmd+=("${CH_CLIENT_FLAGS[@]}")
+  fi
+  cmd+=("$@")
+  "${cmd[@]}"
+}
 
 # Prefer sql/schema.sql if present, else fallback to sql/schema_dev.sql
 SCHEMA_FILE="${SCHEMA_FILE:-}"
@@ -24,25 +43,37 @@ fi
 
 echo "Ensuring database exists: ${CH_DB}"
 if command -v clickhouse-client >/dev/null 2>&1; then
-  clickhouse-client -q "CREATE DATABASE IF NOT EXISTS ${CH_DB}"
+  run_clickhouse -q "CREATE DATABASE IF NOT EXISTS ${CH_DB}"
   if [[ "${SCHEMA_FILE}" == "/dev/null" ]]; then
     echo "Database ensured; skipping schema apply (SCHEMA_FILE=/dev/null)"
     exit 0
   fi
   echo "Applying schema file: ${SCHEMA_FILE} to DB=${CH_DB}"
-  clickhouse-client --database "${CH_DB}" --queries-file "${SCHEMA_FILE}"
+  run_clickhouse --database "${CH_DB}" --queries-file "${SCHEMA_FILE}"
   exit 0
 fi
 
 echo "clickhouse-client not found on host; trying docker compose exec..."
 if command -v docker >/dev/null 2>&1; then
-  # shellcheck disable=SC2090
   if docker compose ps --status=running >/dev/null 2>&1; then
+    # Support overriding docker compose command via DOCKER_COMPOSE.
+    # shellcheck disable=SC2207
+    DOCKER_COMPOSE_CMD=($(echo "${DOCKER_COMPOSE:-docker compose}"))
+    docker_clickhouse_client() {
+      local cmd=("${DOCKER_COMPOSE_CMD[@]}" exec -T clickhouse clickhouse-client)
+      if ((${#CH_CLIENT_FLAGS[@]})); then
+        cmd+=("${CH_CLIENT_FLAGS[@]}")
+      fi
+      cmd+=("$@")
+      "${cmd[@]}"
+    }
+
+    docker_clickhouse_client --query "CREATE DATABASE IF NOT EXISTS ${CH_DB}"
     if [[ "${SCHEMA_FILE}" == "/dev/null" ]]; then
-      docker compose exec -T clickhouse bash -lc "clickhouse-client -q 'CREATE DATABASE IF NOT EXISTS ${CH_DB}'"
-    else
-      docker compose exec -T clickhouse bash -lc "clickhouse-client -q 'CREATE DATABASE IF NOT EXISTS ${CH_DB}' && clickhouse-client --database '${CH_DB}' -n" < "${SCHEMA_FILE}"
+      echo "Database ensured; skipping schema apply (SCHEMA_FILE=/dev/null)"
+      exit 0
     fi
+    docker_clickhouse_client --database "${CH_DB}" -n < "${SCHEMA_FILE}"
     exit 0
   fi
 fi

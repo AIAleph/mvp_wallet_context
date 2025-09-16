@@ -11,7 +11,7 @@ endif
 
 # Public targets requested
 .PHONY: schema api ingest test lint go-test api-test ingest-dev go-cover api-cover tools-test \
-    dev-up dev-down dev-logs dev-nuke ch-client
+    dev-up dev-down dev-logs dev-nuke ch-client ensure-clickhouse migrate-schema
 
 # Local dev stack: ClickHouse and Redis (minimal, no Keeper needed)
 dev-up:
@@ -33,6 +33,12 @@ dev-nuke:
 # Apply schema via script (prefers sql/schema.sql; falls back to dev)
 schema:
 	./scripts/schema.sh
+
+ensure-clickhouse:
+	./scripts/ensure_clickhouse.sh
+
+migrate-schema: ensure-clickhouse
+	./scripts/migrate_schema.sh $(if $(TO),TO=$(TO),) $(if $(DB),DB=$(DB),) $(if $(DRY_RUN),DRY_RUN=$(DRY_RUN),)
 
 # Open an interactive ClickHouse client inside the container
 ch-client:

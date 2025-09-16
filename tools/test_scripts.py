@@ -1,12 +1,23 @@
 import os
+import shutil
 import stat
-import tempfile
 import subprocess
 from pathlib import Path
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def run(cmd, env=None, cwd=None):
-    return subprocess.run(cmd, shell=True, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    target_cwd = cwd if cwd is not None else REPO_ROOT
+    return subprocess.run(
+        cmd,
+        shell=True,
+        env=env,
+        cwd=target_cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
 
 
 def test_shell_scripts_syntax():
@@ -71,7 +82,11 @@ exit 0
     nm = api_dir / "node_modules"
     if nm.exists():
         # ensure empty to enforce install path
-        for p in nm.glob("*"): pass
+        for child in nm.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
     # Run test subcommand; stub npm will handle it
     r = run("scripts/api.sh test", env=env)
     assert r.returncode == 0, r.stderr.decode()
@@ -94,7 +109,10 @@ exit 0
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     addr = "0x" + "a" * 40
-    r = run(f"scripts/ingest.sh ADDRESS={addr} MODE=backfill FROM=0 TO=0 BATCH=10 SCHEMA=dev", env=env)
+    r = run(
+        f"scripts/ingest.sh ADDRESS={addr} MODE=backfill FROM=0 TO=0 BATCH=10 SCHEMA=dev",
+        env=env,
+    )
     assert r.returncode == 0, r.stderr.decode()
 
 

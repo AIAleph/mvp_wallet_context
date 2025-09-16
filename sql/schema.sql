@@ -11,13 +11,13 @@ CREATE TABLE IF NOT EXISTS logs (
   data_hex String,
   block_number UInt64,
   ts DateTime64(3, 'UTC'),
-  ingested_at DateTime64(3, 'UTC') DEFAULT now64(3)
+  ingested_at DateTime64(3, 'UTC') DEFAULT now64(3),
+  -- Data skipping indexes for common filters (ClickHouse requires these inside column list)
+  INDEX idx_logs_address address TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_logs_block block_number TYPE minmax GRANULARITY 1
 ) ENGINE = ReplacingMergeTree(ingested_at)
 ORDER BY (tx_hash, log_index)
-SETTINGS index_granularity = 8192
--- Data skipping indexes for common filters
-INDEX idx_logs_address address TYPE bloom_filter GRANULARITY 2
-INDEX idx_logs_block block_number TYPE minmax GRANULARITY 1;
+SETTINGS index_granularity = 8192;
 
 -- Internal traces
 CREATE TABLE IF NOT EXISTS traces (
@@ -29,13 +29,13 @@ CREATE TABLE IF NOT EXISTS traces (
   value_raw String,
   block_number UInt64,
   ts DateTime64(3, 'UTC'),
-  ingested_at DateTime64(3, 'UTC') DEFAULT now64(3)
+  ingested_at DateTime64(3, 'UTC') DEFAULT now64(3),
+  INDEX idx_traces_from from_addr TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_traces_to to_addr TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_traces_block block_number TYPE minmax GRANULARITY 1
 ) ENGINE = ReplacingMergeTree(ingested_at)
 ORDER BY (tx_hash, trace_id)
-SETTINGS index_granularity = 8192
-INDEX idx_traces_from from_addr TYPE bloom_filter GRANULARITY 2
-INDEX idx_traces_to to_addr TYPE bloom_filter GRANULARITY 2
-INDEX idx_traces_block block_number TYPE minmax GRANULARITY 1;
+SETTINGS index_granularity = 8192;
 
 -- Token transfers (ERC-20/721/1155)
 CREATE TABLE IF NOT EXISTS token_transfers (
@@ -50,14 +50,14 @@ CREATE TABLE IF NOT EXISTS token_transfers (
   standard LowCardinality(String),
   block_number UInt64,
   ts DateTime64(3, 'UTC'),
-  ingested_at DateTime64(3, 'UTC') DEFAULT now64(3)
+  ingested_at DateTime64(3, 'UTC') DEFAULT now64(3),
+  INDEX idx_tok_xfer_token token TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_tok_xfer_from from_addr TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_tok_xfer_to to_addr TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_tok_xfer_block block_number TYPE minmax GRANULARITY 1
 ) ENGINE = ReplacingMergeTree(ingested_at)
 ORDER BY (tx_hash, log_index, token_id)
-SETTINGS index_granularity = 8192
-INDEX idx_tok_xfer_token token TYPE bloom_filter GRANULARITY 2
-INDEX idx_tok_xfer_from from_addr TYPE bloom_filter GRANULARITY 2
-INDEX idx_tok_xfer_to to_addr TYPE bloom_filter GRANULARITY 2
-INDEX idx_tok_xfer_block block_number TYPE minmax GRANULARITY 1;
+SETTINGS index_granularity = 8192;
 
 -- Approvals (ERC-20/721/1155)
 CREATE TABLE IF NOT EXISTS approvals (
@@ -73,14 +73,14 @@ CREATE TABLE IF NOT EXISTS approvals (
   standard LowCardinality(String),
   block_number UInt64,
   ts DateTime64(3, 'UTC'),
-  ingested_at DateTime64(3, 'UTC') DEFAULT now64(3)
+  ingested_at DateTime64(3, 'UTC') DEFAULT now64(3),
+  INDEX idx_approvals_token token TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_approvals_owner owner TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_approvals_spender spender TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_approvals_block block_number TYPE minmax GRANULARITY 1
 ) ENGINE = ReplacingMergeTree(ingested_at)
 ORDER BY (tx_hash, log_index)
-SETTINGS index_granularity = 8192
-INDEX idx_approvals_token token TYPE bloom_filter GRANULARITY 2
-INDEX idx_approvals_owner owner TYPE bloom_filter GRANULARITY 2
-INDEX idx_approvals_spender spender TYPE bloom_filter GRANULARITY 2
-INDEX idx_approvals_block block_number TYPE minmax GRANULARITY 1;
+SETTINGS index_granularity = 8192;
 
 -- Addresses sync checkpoints
 CREATE TABLE IF NOT EXISTS addresses (
@@ -88,12 +88,12 @@ CREATE TABLE IF NOT EXISTS addresses (
   last_synced_block UInt64,
   last_backfill_at DateTime64(3, 'UTC') DEFAULT toDateTime64(0, 3, 'UTC'),
   last_delta_at DateTime64(3, 'UTC') DEFAULT toDateTime64(0, 3, 'UTC'),
-  updated_at DateTime64(3, 'UTC') DEFAULT now64(3)
+  updated_at DateTime64(3, 'UTC') DEFAULT now64(3),
+  INDEX idx_addresses_addr address TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_addresses_block last_synced_block TYPE minmax GRANULARITY 1
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (address)
-SETTINGS index_granularity = 8192
-INDEX idx_addresses_addr address TYPE bloom_filter GRANULARITY 2
-INDEX idx_addresses_block last_synced_block TYPE minmax GRANULARITY 1;
+SETTINGS index_granularity = 8192;
 
 -- Contracts registry and metadata
 CREATE TABLE IF NOT EXISTS contracts (
@@ -105,11 +105,11 @@ CREATE TABLE IF NOT EXISTS contracts (
   created_at_tx String,
   first_seen_block UInt64,
   probed_at DateTime64(3, 'UTC') DEFAULT now64(3),
-  updated_at DateTime64(3, 'UTC') DEFAULT now64(3)
+  updated_at DateTime64(3, 'UTC') DEFAULT now64(3),
+  INDEX idx_contracts_addr address TYPE bloom_filter GRANULARITY 2
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (address)
-SETTINGS index_granularity = 8192
-INDEX idx_contracts_addr address TYPE bloom_filter GRANULARITY 2;
+SETTINGS index_granularity = 8192;
 
 -- Label registry (curated + imported)
 CREATE TABLE IF NOT EXISTS labels (
@@ -117,11 +117,11 @@ CREATE TABLE IF NOT EXISTS labels (
   label String,
   source LowCardinality(String),
   confidence Decimal(5, 4) DEFAULT 1.0000,
-  updated_at DateTime64(3, 'UTC') DEFAULT now64(3)
+  updated_at DateTime64(3, 'UTC') DEFAULT now64(3),
+  INDEX idx_labels_addr address TYPE bloom_filter GRANULARITY 2
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (address, label)
-SETTINGS index_granularity = 8192
-INDEX idx_labels_addr address TYPE bloom_filter GRANULARITY 2;
+SETTINGS index_granularity = 8192;
 
 -- Embeddings for semantic search (address/token/contract/label)
 CREATE TABLE IF NOT EXISTS embeddings (
