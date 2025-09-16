@@ -32,6 +32,9 @@ const envSchema = z.object({
   HEALTH_PING_TIMEOUT_MS: z.string().optional(),
   HEALTH_CACHE_TTL_MS: z.string().optional(),
   HEALTH_RATE_LIMIT_RPS: z.string().optional(),
+  HEALTH_CACHE_CAPACITY: z.string().optional(),
+  HEALTH_CIRCUIT_BREAKER_FAILURES: z.string().optional(),
+  HEALTH_CIRCUIT_BREAKER_RESET_MS: z.string().optional(),
 })
 
 export function loadConfig() {
@@ -56,6 +59,11 @@ export function loadConfig() {
     healthPingTimeoutMs: intFromEnv('HEALTH_PING_TIMEOUT_MS', 3000),
     healthCacheTtlMs: intFromEnv('HEALTH_CACHE_TTL_MS', 5000),
     healthRateLimitRps: intFromEnv('HEALTH_RATE_LIMIT_RPS', 0),
+    healthCacheCapacity: intFromEnv('HEALTH_CACHE_CAPACITY', 8),
+    healthCircuitBreaker: {
+      failureThreshold: intFromEnv('HEALTH_CIRCUIT_BREAKER_FAILURES', 3),
+      resetMs: intFromEnv('HEALTH_CIRCUIT_BREAKER_RESET_MS', 30000),
+    },
   }
 }
 

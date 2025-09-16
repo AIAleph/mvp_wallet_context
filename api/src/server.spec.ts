@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { app } from './server.js'
-import { start } from './server.js'
+import { app, start, __resetHealthStateForTests, __testInternals } from './server.js'
+import { loadConfig } from './config.js'
 
 describe('API server', () => {
+  beforeEach(() => {
+    __resetHealthStateForTests()
+  })
+
   it('GET /health returns ok', async () => {
     const res = await app.inject({ method: 'GET', url: '/health' })
     expect(res.statusCode).toBe(200)
@@ -107,8 +111,8 @@ describe('API server', () => {
     const p = app.inject({ method: 'GET', url: '/health' })
     await vi.advanceTimersByTimeAsync(5)
     const res = await p
-    expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ status: 'ok' })
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual({ status: 'degraded' })
     expect(spy).toHaveBeenCalled()
     const init = spy.mock.calls[0][1]
     expect(init?.signal?.aborted).toBe(true)
@@ -151,14 +155,16 @@ describe('API server', () => {
     process.env.HEALTH_CACHE_TTL_MS = '0'
     process.env.CLICKHOUSE_URL = 'http://localhost:8123'
     process.env.CLICKHOUSE_DB = 'db'
-    const spy = vi.fn().mockRejectedValue(new Error('boom'))
+    const err = new Error('connection refused')
+    const spy = vi.fn().mockRejectedValue(err)
     ;(globalThis as any).fetch = spy
     const res = await app.inject({ method: 'GET', url: '/healthz' })
-    expect(res.statusCode).toBe(200)
+    expect(res.statusCode).toBe(503)
     const body = res.json() as any
+    expect(body.status).toBe('degraded')
     expect(body.clickhouse.configured).toBe(true)
     expect(body.clickhouse.ok).toBe(false)
-    expect(String(body.clickhouse.error)).toContain('boom')
+    expect(body.clickhouse.error).toBe('unreachable')
     ;(globalThis as any).fetch = orig
   })
 
@@ -171,10 +177,11 @@ describe('API server', () => {
     const spy = vi.fn().mockRejectedValue('oops')
     ;(globalThis as any).fetch = spy
     const res = await app.inject({ method: 'GET', url: '/healthz' })
-    expect(res.statusCode).toBe(200)
+    expect(res.statusCode).toBe(503)
     const body = res.json() as any
+    expect(body.status).toBe('degraded')
     expect(body.clickhouse.ok).toBe(false)
-    expect(String(body.clickhouse.error)).toContain('oops')
+    expect(body.clickhouse.error).toBe('unavailable')
     ;(globalThis as any).fetch = orig
   })
 
@@ -189,8 +196,16 @@ describe('API server', () => {
     const spy = vi.fn((_input: any, init?: any) => {
       return new Promise((_resolve, reject) => {
         const signal: AbortSignal | undefined = init?.signal
-        if (signal?.aborted) return reject(new Error('aborted'))
-        signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        if (signal?.aborted) {
+          const error = new Error('aborted')
+          error.name = 'AbortError'
+          return reject(error)
+        }
+        signal?.addEventListener('abort', () => {
+          const error = new Error('aborted')
+          error.name = 'AbortError'
+          reject(error)
+        })
       })
     })
     ;(globalThis as any).fetch = spy
@@ -198,11 +213,11 @@ describe('API server', () => {
     const p = app.inject({ method: 'GET', url: '/healthz' })
     await vi.advanceTimersByTimeAsync(5)
     const res = await p
-    expect(res.statusCode).toBe(200)
+    expect(res.statusCode).toBe(503)
     const body = res.json() as any
     expect(body.clickhouse.configured).toBe(true)
     expect(body.clickhouse.ok).toBe(false)
-    expect(String(body.clickhouse.error)).toContain('aborted')
+    expect(body.clickhouse.error).toBe('timeout')
     expect(spy).toHaveBeenCalled()
 
     vi.useRealTimers()
@@ -257,19 +272,81 @@ describe('API server', () => {
   })
 
   it('healthz rate limit and caching work', async () => {
+    const orig = globalThis.fetch as any
+    const spy = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+    ;(globalThis as any).fetch = spy
     process.env.HEALTH_DEBUG = '1'
     process.env.CLICKHOUSE_URL = 'http://localhost:8123'
     process.env.CLICKHOUSE_DB = 'db'
     process.env.HEALTH_RATE_LIMIT_RPS = '0'
-    process.env.HEALTH_CACHE_TTL_MS = '0'
-    // First call performs fetch
+    process.env.HEALTH_CACHE_TTL_MS = '10000'
     let res = await app.inject({ method: 'GET', url: '/healthz' })
     expect(res.statusCode).toBe(200)
-    // Second call within TTL should be cached (no additional fetch)
-    process.env.HEALTH_CACHE_TTL_MS = '10000'
+    expect(spy).toHaveBeenCalledTimes(1)
     res = await app.inject({ method: 'GET', url: '/healthz' })
     expect(res.statusCode).toBe(200)
-    // No explicit spy assertion to avoid cache state flakiness across tests
+    expect(spy).toHaveBeenCalledTimes(1)
+    ;(globalThis as any).fetch = orig
+  })
+
+  it('healthz returns fallback when circuit is open', async () => {
+    const orig = globalThis.fetch as any
+    const env = process.env
+    const backup: Record<string, string> = {}
+    for (const k of ['HEALTH_DEBUG', 'CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS', 'HEALTH_CIRCUIT_BREAKER_FAILURES']) {
+      if (env[k] !== undefined) backup[k] = env[k] as string
+    }
+    env.HEALTH_DEBUG = '1'
+    env.CLICKHOUSE_URL = 'http://localhost:8123'
+    env.CLICKHOUSE_DB = 'db'
+    env.HEALTH_CACHE_TTL_MS = '0'
+    env.HEALTH_CIRCUIT_BREAKER_FAILURES = '1'
+    const err = new Error('refused')
+    const spy = vi.fn().mockRejectedValue(err)
+    ;(globalThis as any).fetch = spy
+
+    // Prime breaker via /health failure
+    await app.inject({ method: 'GET', url: '/health' })
+    spy.mockClear()
+
+    const res = await app.inject({ method: 'GET', url: '/healthz' })
+    expect(res.statusCode).toBe(503)
+    const body = res.json() as any
+    expect(body.status).toBe('degraded')
+    expect(body.clickhouse.error).toBe('temporarily unavailable')
+    expect(spy).not.toHaveBeenCalled()
+
+    for (const k of ['HEALTH_DEBUG', 'CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS', 'HEALTH_CIRCUIT_BREAKER_FAILURES']) {
+      if (backup[k] !== undefined) env[k] = backup[k]
+      else delete env[k]
+    }
+    ;(globalThis as any).fetch = orig
+  })
+
+  it('healthz handles non-200 ClickHouse responses', async () => {
+    const orig = globalThis.fetch as any
+    const env = process.env
+    const backup: Record<string, string> = {}
+    for (const k of ['HEALTH_DEBUG', 'CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS']) {
+      if (env[k] !== undefined) backup[k] = env[k] as string
+    }
+    env.HEALTH_DEBUG = '1'
+    env.CLICKHOUSE_URL = 'http://localhost:8123'
+    env.CLICKHOUSE_DB = 'db'
+    env.HEALTH_CACHE_TTL_MS = '0'
+    const spy = vi.fn().mockResolvedValue({ ok: false, status: 500 })
+    ;(globalThis as any).fetch = spy
+    const res = await app.inject({ method: 'GET', url: '/healthz' })
+    expect(res.statusCode).toBe(503)
+    const body = res.json() as any
+    expect(body.status).toBe('degraded')
+    expect(body.clickhouse.ok).toBe(false)
+    expect(body.clickhouse.error).toBe('unavailable')
+    for (const k of ['HEALTH_DEBUG', 'CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS']) {
+      if (backup[k] !== undefined) env[k] = backup[k]
+      else delete env[k]
+    }
+    ;(globalThis as any).fetch = orig
   })
 
   it('rate limits healthz when configured', async () => {
@@ -303,6 +380,236 @@ describe('API server', () => {
     expect(auth).toMatch(/^Basic /)
     ;(globalThis as any).fetch = orig
     vi.useRealTimers()
+  })
+
+  it('GET /health caches successful checks and respects TTL', async () => {
+    const orig = globalThis.fetch as any
+    const env = process.env
+    const backup: Record<string, string> = {}
+    for (const k of ['CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS', 'HEALTH_CACHE_CAPACITY']) {
+      if (env[k] !== undefined) backup[k] = env[k] as string
+    }
+    env.CLICKHOUSE_URL = 'http://localhost:8123'
+    env.CLICKHOUSE_DB = 'db'
+    env.HEALTH_CACHE_TTL_MS = '1000'
+    env.HEALTH_CACHE_CAPACITY = '2'
+    const spy = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+    ;(globalThis as any).fetch = spy
+
+    const first = await app.inject({ method: 'GET', url: '/health' })
+    expect(first.statusCode).toBe(200)
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    const second = await app.inject({ method: 'GET', url: '/health' })
+    expect(second.statusCode).toBe(200)
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(Date.now() + 2000))
+    const third = await app.inject({ method: 'GET', url: '/health' })
+    expect(third.statusCode).toBe(200)
+    expect(spy).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+
+    for (const k of ['CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS', 'HEALTH_CACHE_CAPACITY']) {
+      if (backup[k] !== undefined) env[k] = backup[k]
+      else delete env[k]
+    }
+    ;(globalThis as any).fetch = orig
+  })
+
+  it('GET /health caches degraded status during TTL', async () => {
+    const orig = globalThis.fetch as any
+    const env = process.env
+    const backup: Record<string, string> = {}
+    for (const k of ['CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS']) {
+      if (env[k] !== undefined) backup[k] = env[k] as string
+    }
+    env.CLICKHOUSE_URL = 'http://localhost:8123'
+    env.CLICKHOUSE_DB = 'db'
+    env.HEALTH_CACHE_TTL_MS = '1000'
+    const spy = vi.fn().mockRejectedValue(new Error('boom'))
+    ;(globalThis as any).fetch = spy
+
+    const first = await app.inject({ method: 'GET', url: '/health' })
+    expect(first.statusCode).toBe(503)
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    const second = await app.inject({ method: 'GET', url: '/health' })
+    expect(second.statusCode).toBe(503)
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    for (const k of ['CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS']) {
+      if (backup[k] !== undefined) env[k] = backup[k]
+      else delete env[k]
+    }
+    ;(globalThis as any).fetch = orig
+  })
+
+  it('GET /health opens and recovers circuit breaker', async () => {
+    const orig = globalThis.fetch as any
+    const env = process.env
+    const backup: Record<string, string> = {}
+    for (const k of ['CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS', 'HEALTH_CIRCUIT_BREAKER_FAILURES', 'HEALTH_CIRCUIT_BREAKER_RESET_MS']) {
+      if (env[k] !== undefined) backup[k] = env[k] as string
+    }
+    env.CLICKHOUSE_URL = 'http://localhost:8123'
+    env.CLICKHOUSE_DB = 'db'
+    env.HEALTH_CACHE_TTL_MS = '0'
+    env.HEALTH_CIRCUIT_BREAKER_FAILURES = '2'
+    env.HEALTH_CIRCUIT_BREAKER_RESET_MS = '1000'
+    const spy = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('refused'))
+      .mockRejectedValueOnce(new Error('refused'))
+    ;(globalThis as any).fetch = spy
+    vi.useFakeTimers()
+
+    const first = await app.inject({ method: 'GET', url: '/health' })
+    expect(first.statusCode).toBe(503)
+    const second = await app.inject({ method: 'GET', url: '/health' })
+    expect(second.statusCode).toBe(503)
+
+    spy.mockClear()
+    const third = await app.inject({ method: 'GET', url: '/health' })
+    expect(third.statusCode).toBe(503)
+    expect(spy).not.toHaveBeenCalled()
+
+    vi.setSystemTime(new Date(Date.now() + 2000))
+    spy.mockResolvedValueOnce({ ok: true, status: 200 })
+    const fourth = await app.inject({ method: 'GET', url: '/health' })
+    expect(fourth.statusCode).toBe(200)
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    vi.useRealTimers()
+    for (const k of ['CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS', 'HEALTH_CIRCUIT_BREAKER_FAILURES', 'HEALTH_CIRCUIT_BREAKER_RESET_MS']) {
+      if (backup[k] !== undefined) env[k] = backup[k]
+      else delete env[k]
+    }
+    ;(globalThis as any).fetch = orig
+  })
+
+  it('GET /health skips circuit breaker when disabled', async () => {
+    const orig = globalThis.fetch as any
+    const env = process.env
+    const backup: Record<string, string> = {}
+    for (const k of ['CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS', 'HEALTH_CIRCUIT_BREAKER_FAILURES']) {
+      if (env[k] !== undefined) backup[k] = env[k] as string
+    }
+    env.CLICKHOUSE_URL = 'http://localhost:8123'
+    env.CLICKHOUSE_DB = 'db'
+    env.HEALTH_CACHE_TTL_MS = '0'
+    env.HEALTH_CIRCUIT_BREAKER_FAILURES = '0'
+    const error = new Error('refused')
+    const spy = vi.fn().mockRejectedValue(error)
+    ;(globalThis as any).fetch = spy
+
+    const first = await app.inject({ method: 'GET', url: '/health' })
+    expect(first.statusCode).toBe(503)
+    const second = await app.inject({ method: 'GET', url: '/health' })
+    expect(second.statusCode).toBe(503)
+    expect(spy).toHaveBeenCalledTimes(2)
+
+    for (const k of ['CLICKHOUSE_URL', 'CLICKHOUSE_DB', 'HEALTH_CACHE_TTL_MS', 'HEALTH_CIRCUIT_BREAKER_FAILURES']) {
+      if (backup[k] !== undefined) env[k] = backup[k]
+      else delete env[k]
+    }
+    ;(globalThis as any).fetch = orig
+  })
+
+  describe('internal helpers', () => {
+    it('TimedLRUCache supports eviction and TTL', () => {
+      const { TimedLRUCache } = __testInternals as any
+      expect(() => new TimedLRUCache<string, number>(0)).toThrow()
+      const cache = new TimedLRUCache<string, number>(2)
+      cache.set('a', 1, 1000, 0)
+      expect(cache.get('a', 0)).toBe(1)
+      cache.set('b', 2, 1000, 0)
+      cache.set('c', 3, 1000, 0)
+      expect(cache.get('a', 0)).toBeUndefined()
+      expect(cache.get('b', 0)).toBe(2)
+      expect(cache.get('c', 0)).toBe(3)
+      cache.set('c', 5, 1000, 0)
+      expect(cache.get('c', 0)).toBe(5)
+      cache.set('b', 2, 0, 0)
+      expect(cache.get('b', 0)).toBeUndefined()
+      cache.set('d', 4, 1000, 0)
+      expect(cache.get('d', 2001)).toBeUndefined()
+      cache.prune(2001)
+    })
+
+    it('CoalescingMap coalesces concurrent factories', async () => {
+      const { CoalescingMap } = __testInternals as any
+      const map = new CoalescingMap<string, number>()
+      const loader = vi.fn(async () => 42)
+      const results = await Promise.all([map.run('x', loader), map.run('x', loader)])
+      expect(results).toEqual([42, 42])
+      expect(loader).toHaveBeenCalledTimes(1)
+      map.clear()
+      await map.run('x', loader)
+      expect(loader).toHaveBeenCalledTimes(2)
+    })
+
+    it('CircuitBreaker transitions across states', () => {
+      const { CircuitBreaker } = __testInternals as any
+      const breaker = new CircuitBreaker(2, 1000)
+      expect(breaker.allow(0)).toBe(true)
+      breaker.recordFailure(0)
+      expect(breaker.allow(1)).toBe(true)
+      breaker.recordFailure(1)
+      expect(breaker.allow(2)).toBe(false)
+      breaker.recordFailure(3)
+      expect(breaker.allow(500)).toBe(false)
+      expect(breaker.allow(1000 + 1)).toBe(true)
+      breaker.recordFailure(1001)
+      expect(breaker.allow(1002)).toBe(false)
+      breaker.recordSuccess()
+      expect(breaker.allow(1003)).toBe(true)
+
+      const disabled = new CircuitBreaker(0, 0)
+      expect(disabled.allow()).toBe(true)
+      disabled.recordFailure()
+      disabled.recordSuccess()
+    })
+
+    it('sanitizeHealthError maps patterns', () => {
+      const { sanitizeHealthError } = __testInternals as any
+      expect(sanitizeHealthError({ name: 'AbortError' })).toBe('timeout')
+      const timeoutErr = new Error('request timed out')
+      expect(sanitizeHealthError(timeoutErr)).toBe('timeout')
+      const unreachableErr = new Error('dns lookup failed')
+      expect(sanitizeHealthError(unreachableErr)).toBe('unreachable')
+      expect(sanitizeHealthError('other')).toBe('unavailable')
+    })
+
+    it('ensureHealthCacheCapacity only rebuilds when needed', () => {
+      const { ensureHealthCacheCapacity } = __testInternals as any
+      ensureHealthCacheCapacity(8)
+      ensureHealthCacheCapacity(3)
+      ensureHealthCacheCapacity(3)
+      ensureHealthCacheCapacity(0)
+      __resetHealthStateForTests()
+    })
+
+    it('getClickHouseBreaker reuses existing breakers', () => {
+      const { getClickHouseBreaker } = __testInternals as any
+      const base = loadConfig()
+      const cfg = {
+        ...base,
+        healthCircuitBreaker: { failureThreshold: 1, resetMs: 1000 },
+      }
+      const breaker1 = getClickHouseBreaker(cfg, 'dsn')
+      const breaker2 = getClickHouseBreaker(cfg, 'dsn')
+      expect(breaker1).toBe(breaker2)
+      const cfg2 = {
+        ...cfg,
+        healthCircuitBreaker: { failureThreshold: 2, resetMs: 2000 },
+      }
+      const breaker3 = getClickHouseBreaker(cfg2, 'dsn')
+      expect(breaker3).not.toBe(breaker1)
+      const defaultKeyBreaker = getClickHouseBreaker(cfg2, '')
+      expect(defaultKeyBreaker).toBeDefined()
+    })
   })
 
   it('POST /v1/address/:address/sync validates address', async () => {

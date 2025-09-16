@@ -2,10 +2,203 @@ import Fastify from 'fastify'
 import { z } from 'zod'
 import { fileURLToPath } from 'url'
 import { loadConfig } from './config.js'
+import type { AppConfig } from './config.js'
 
 // Minimal Fastify server scaffold. Final API will expose endpoints for sync,
 // summary, lists, and semantic search.
 export const app = Fastify({ logger: true })
+
+class TimedLRUCache<K, V> {
+  #store = new Map<K, { value: V; expiresAt: number }>()
+  constructor(private readonly capacity: number) {
+    if (!Number.isFinite(capacity) || capacity <= 0) {
+      throw new Error('TimedLRUCache capacity must be positive')
+    }
+  }
+
+  get(key: K, now = Date.now()): V | undefined {
+    const entry = this.#store.get(key)
+    if (!entry) return undefined
+    if (entry.expiresAt <= now) {
+      this.#store.delete(key)
+      return undefined
+    }
+    this.#store.delete(key)
+    this.#store.set(key, entry)
+    return entry.value
+  }
+
+  set(key: K, value: V, ttlMs: number, now = Date.now()): void {
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+      this.#store.delete(key)
+      return
+    }
+    this.prune(now)
+    if (this.#store.has(key)) {
+      this.#store.delete(key)
+    }
+    this.#store.set(key, { value, expiresAt: now + ttlMs })
+    while (this.#store.size > this.capacity) {
+      const oldestKey = this.#store.keys().next().value
+      /* c8 ignore next */
+      if (oldestKey === undefined) break
+      this.#store.delete(oldestKey)
+    }
+  }
+
+  prune(now = Date.now()): void {
+    for (const [key, entry] of this.#store.entries()) {
+      if (entry.expiresAt <= now) {
+        this.#store.delete(key)
+      }
+    }
+  }
+}
+
+class CoalescingMap<K, V> {
+  #pending = new Map<K, Promise<V>>()
+  async run(key: K, factory: () => Promise<V>): Promise<V> {
+    const existing = this.#pending.get(key)
+    if (existing) {
+      return existing
+    }
+    const task = (async () => {
+      try {
+        return await factory()
+      } finally {
+        this.#pending.delete(key)
+      }
+    })()
+    this.#pending.set(key, task)
+    return task
+  }
+
+  clear(): void {
+    this.#pending.clear()
+  }
+}
+
+class CircuitBreaker {
+  #state: 'closed' | 'open' | 'half-open' = 'closed'
+  #failures = 0
+  #openedAt = 0
+  constructor(private readonly failureThreshold: number, private readonly resetTimeoutMs: number) {}
+
+  allow(now = Date.now()): boolean {
+    if (this.failureThreshold <= 0 || this.resetTimeoutMs <= 0) {
+      return true
+    }
+    if (this.#state === 'open') {
+      if (now - this.#openedAt >= this.resetTimeoutMs) {
+        this.#state = 'half-open'
+        return true
+      }
+      return false
+    }
+    return true
+  }
+
+  recordSuccess(): void {
+    if (this.failureThreshold <= 0 || this.resetTimeoutMs <= 0) {
+      return
+    }
+    this.#failures = 0
+    this.#state = 'closed'
+    this.#openedAt = 0
+  }
+
+  recordFailure(now = Date.now()): void {
+    if (this.failureThreshold <= 0 || this.resetTimeoutMs <= 0) {
+      return
+    }
+    if (this.#state === 'open' && now - this.#openedAt < this.resetTimeoutMs) {
+      return
+    }
+    if (this.#state === 'half-open') {
+      this.#state = 'open'
+      this.#openedAt = now
+      this.#failures = this.failureThreshold
+      return
+    }
+    this.#failures += 1
+    if (this.#failures >= this.failureThreshold) {
+      this.#state = 'open'
+      this.#openedAt = now
+    }
+  }
+}
+
+const DEFAULT_HEALTH_CACHE_CAPACITY = 8
+type HealthSummaryStatus = 'ok' | 'degraded'
+type HealthPingState = { at: number; ok: boolean }
+type CachedHealthPayload = { body: { status: HealthSummaryStatus; clickhouse: ClickHouseHealth }; statusCode: number }
+
+let healthPingCache = new TimedLRUCache<string, HealthPingState>(DEFAULT_HEALTH_CACHE_CAPACITY)
+let healthPayloadCache = new TimedLRUCache<string, CachedHealthPayload>(DEFAULT_HEALTH_CACHE_CAPACITY)
+let currentHealthCacheCapacity = DEFAULT_HEALTH_CACHE_CAPACITY
+
+const healthPingCoalescer = new CoalescingMap<string, void>()
+const healthPayloadCoalescer = new CoalescingMap<string, CachedHealthPayload>()
+const clickhouseBreakers = new Map<string, { breaker: CircuitBreaker; threshold: number; resetMs: number }>()
+
+function ensureHealthCacheCapacity(capacity: number): void {
+  let next = Number.isFinite(capacity) && capacity > 0 ? Math.floor(capacity) : DEFAULT_HEALTH_CACHE_CAPACITY
+  if (next === currentHealthCacheCapacity) {
+    return
+  }
+  healthPingCache = new TimedLRUCache<string, HealthPingState>(next)
+  healthPayloadCache = new TimedLRUCache<string, CachedHealthPayload>(next)
+  currentHealthCacheCapacity = next
+}
+
+function getClickHouseBreaker(cfg: AppConfig, key: string): CircuitBreaker | undefined {
+  const { failureThreshold, resetMs } = cfg.healthCircuitBreaker
+  if (failureThreshold <= 0 || resetMs <= 0) {
+    return undefined
+  }
+  const mapKey = key || 'default'
+  const existing = clickhouseBreakers.get(mapKey)
+  if (existing && existing.threshold === failureThreshold && existing.resetMs === resetMs) {
+    return existing.breaker
+  }
+  const breaker = new CircuitBreaker(failureThreshold, resetMs)
+  clickhouseBreakers.set(mapKey, { breaker, threshold: failureThreshold, resetMs })
+  return breaker
+}
+
+function sanitizeHealthError(err: unknown): string {
+  if (err && typeof err === 'object' && 'name' in err && (err as any).name === 'AbortError') {
+    return 'timeout'
+  }
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase()
+    if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('abort')) {
+      return 'timeout'
+    }
+    if (msg.includes('refused') || msg.includes('unreachable') || msg.includes('dns')) {
+      return 'unreachable'
+    }
+  }
+  return 'unavailable'
+}
+
+export function __resetHealthStateForTests() {
+  healthPingCache = new TimedLRUCache<string, HealthPingState>(DEFAULT_HEALTH_CACHE_CAPACITY)
+  healthPayloadCache = new TimedLRUCache<string, CachedHealthPayload>(DEFAULT_HEALTH_CACHE_CAPACITY)
+  currentHealthCacheCapacity = DEFAULT_HEALTH_CACHE_CAPACITY
+  healthPingCoalescer.clear()
+  healthPayloadCoalescer.clear()
+  clickhouseBreakers.clear()
+}
+
+export const __testInternals = {
+  TimedLRUCache,
+  CoalescingMap,
+  CircuitBreaker,
+  sanitizeHealthError,
+  ensureHealthCacheCapacity,
+  getClickHouseBreaker,
+}
 
 // Prometheus-style metrics (lightweight, no external deps)
 type Counter = Map<string, number>
@@ -41,11 +234,6 @@ app.get('/metrics', async (_req, reply) => {
   return reply.header('content-type', 'text/plain; version=0.0.4').send(lines.join('\n') + '\n')
 })
 
-// Simple in-memory cache and rate limiter for health endpoints
-let lastHealthPingTs = 0
-let lastHealthzTs = 0
-let lastHealthzPayload: { status: 'ok'; clickhouse: ClickHouseHealth } | null = null
-
 type ClickHouseHealth = {
   configured: boolean
   ok: boolean
@@ -77,29 +265,53 @@ app.get('/health', async (req, reply) => {
   if (!healthLimiter(cfg.healthRateLimitRps)) {
     return reply.code(429).send({ error: 'rate limited' })
   }
-  // Lightweight ClickHouse health check: only if configured; ignore errors.
+  ensureHealthCacheCapacity(cfg.healthCacheCapacity)
+  const dsn = buildClickHouseDSN(cfg)
+  if (!dsn) {
+    return { status: 'ok' }
+  }
+  const cacheKey = dsn
+  const breaker = getClickHouseBreaker(cfg, cacheKey)
+  const cached = healthPingCache.get(cacheKey)
+  if (cached) {
+    if (cached.ok) {
+      return { status: 'ok' }
+    }
+    return reply.code(503).send({ status: 'degraded' })
+  }
+  if (breaker && !breaker.allow()) {
+    const now = Date.now()
+    healthPingCache.set(cacheKey, { at: now, ok: false }, cfg.healthCacheTtlMs)
+    return reply.code(503).send({ status: 'degraded' })
+  }
+  let failure: unknown
   try {
-    const dsn = buildClickHouseDSN(cfg)
-    if (dsn) {
-      const now = Date.now()
-      if (now - lastHealthPingTs >= cfg.healthCacheTtlMs) {
+    await healthPingCoalescer.run(cacheKey, async () => {
+      const startedAt = Date.now()
+      try {
         const { url, authHeader } = sanitizeDSNForRequest(dsn, cfg)
         const u = new URL(url)
         const q = new URLSearchParams(u.search)
         q.set('query', 'SELECT 1')
         u.search = q.toString()
-        const ctrl = new AbortController()
-        const timer = setTimeout(() => ctrl.abort(), cfg.healthPingTimeoutMs)
-        try {
-          await fetch(u, { method: 'GET', signal: ctrl.signal, headers: authHeader ? { Authorization: authHeader } : undefined })
-        } finally {
-          clearTimeout(timer)
-          lastHealthPingTs = now
-        }
+        await fetchWithTimeout(u, cfg.healthPingTimeoutMs, authHeader)
+        breaker?.recordSuccess()
+        healthPingCache.set(cacheKey, { at: startedAt, ok: true }, cfg.healthCacheTtlMs)
+      } catch (err) {
+        breaker?.recordFailure(startedAt)
+        healthPingCache.set(cacheKey, { at: startedAt, ok: false }, cfg.healthCacheTtlMs)
+        throw err
       }
-    }
-  } catch {
-    // ignore
+    })
+  } catch (err) {
+    failure = err
+  }
+  const latest = healthPingCache.get(cacheKey)
+  if (latest && latest.ok) {
+    return { status: 'ok' }
+  }
+  if (failure) {
+    return reply.code(503).send({ status: 'degraded' })
   }
   return { status: 'ok' }
 })
@@ -113,38 +325,67 @@ app.get('/healthz', async (req, reply) => {
   if (!cfg.healthDebug) {
     return reply.code(404).send({ error: 'not found' })
   }
+  ensureHealthCacheCapacity(cfg.healthCacheCapacity)
   const dsn = buildClickHouseDSN(cfg)
-  let ch: ClickHouseHealth = { configured: !!dsn, ok: false }
-  if (dsn) {
-    const now = Date.now()
-    if (lastHealthzPayload && now - lastHealthzTs < cfg.healthCacheTtlMs) {
-      return lastHealthzPayload
+  if (!dsn) {
+    const payload: { status: 'ok'; clickhouse: ClickHouseHealth } = {
+      status: 'ok',
+      clickhouse: { configured: false, ok: false },
     }
+    return payload
+  }
+  const cacheKey = dsn
+  const breaker = getClickHouseBreaker(cfg, cacheKey)
+  if (breaker && !breaker.allow()) {
+    const fallback: CachedHealthPayload = {
+      body: {
+        status: 'degraded',
+        clickhouse: { configured: true, ok: false, error: 'temporarily unavailable' },
+      },
+      statusCode: 503,
+    }
+    healthPayloadCache.set(cacheKey, fallback, cfg.healthCacheTtlMs)
+    return reply.code(fallback.statusCode).send(fallback.body)
+  }
+  const cached = healthPayloadCache.get(cacheKey)
+  if (cached) {
+    return reply.code(cached.statusCode).send(cached.body)
+  }
+  const result = await healthPayloadCoalescer.run(cacheKey, async () => {
+    const startedAt = Date.now()
+    const ch: ClickHouseHealth = { configured: true, ok: false }
+    let statusCode = 200
     try {
       const { url, authHeader } = sanitizeDSNForRequest(dsn, cfg)
       const u = new URL(url)
       const q = new URLSearchParams(u.search)
       q.set('query', 'SELECT 1')
       u.search = q.toString()
-      const ctrl = new AbortController()
-      const timer = setTimeout(() => ctrl.abort(), cfg.healthPingTimeoutMs)
-      try {
-        const r = await fetch(u, { method: 'GET', signal: ctrl.signal, headers: authHeader ? { Authorization: authHeader } : undefined })
-        ch.ok = r.ok
-        ch.status = r.status
-      } finally {
-        clearTimeout(timer)
+      const res = await fetchWithTimeout(u, cfg.healthPingTimeoutMs, authHeader)
+      ch.ok = res.ok
+      ch.status = res.status
+      if (res.ok) {
+        breaker?.recordSuccess()
+      } else {
+        statusCode = 503
+        ch.error = 'unavailable'
+        breaker?.recordFailure(startedAt)
       }
-    } catch (e: any) {
+    } catch (err) {
+      statusCode = 503
       ch.ok = false
-      ch.error = String(e?.message || e)
+      ch.error = sanitizeHealthError(err)
+      breaker?.recordFailure(startedAt)
+      const logErr = err instanceof Error ? err.message : String(err)
       /* c8 ignore next */
-      app.log.warn({ err: ch.error, dsn: redactDSN(dsn) }, 'clickhouse healthz error')
+      app.log.warn({ err: logErr, dsn: redactDSN(dsn) }, 'clickhouse healthz error')
     }
-    lastHealthzPayload = { status: 'ok', clickhouse: ch }
-    lastHealthzTs = Date.now()
-  }
-  return { status: 'ok', clickhouse: ch }
+    const status: HealthSummaryStatus = ch.ok ? 'ok' : 'degraded'
+    const payload: CachedHealthPayload = { body: { status, clickhouse: ch }, statusCode }
+    healthPayloadCache.set(cacheKey, payload, cfg.healthCacheTtlMs)
+    return payload
+  })
+  return reply.code(result.statusCode).send(result.body)
 })
 
 /* c8 ignore start */
@@ -187,6 +428,23 @@ function sanitizeDSNForRequest(dsn: string, cfg: ReturnType<typeof loadConfig>):
     return { url: u.toString(), authHeader }
   } catch {
     return { url: dsn }
+  }
+}
+
+async function fetchWithTimeout(u: URL, timeoutMs: number, authHeader?: string): Promise<Response> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    return await fetch(u, {
+      method: 'GET',
+      signal: ctrl.signal,
+      headers: authHeader ? { Authorization: authHeader } : undefined,
+    })
+  } finally {
+    clearTimeout(timer)
+    if (!ctrl.signal.aborted) {
+      ctrl.abort()
+    }
   }
 }
 // Redact credentials in DSN-like URLs for safe logging

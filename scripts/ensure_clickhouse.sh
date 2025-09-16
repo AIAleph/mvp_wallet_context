@@ -19,8 +19,10 @@ clickhouse_ping() {
   if [[ -n "${CLICKHOUSE_USER:-}" ]]; then
     client_cmd+=(--user "${CLICKHOUSE_USER}")
   fi
-  if [[ -n "${CLICKHOUSE_PASS:-}" ]]; then
-    client_cmd+=(--password "${CLICKHOUSE_PASS}")
+  local password="${CLICKHOUSE_PASSWORD:-${CLICKHOUSE_PASS:-}}"
+  if [[ -n "${password}" ]]; then
+    CLICKHOUSE_PASSWORD="${password}" "${client_cmd[@]}" >/dev/null 2>&1
+    return
   fi
   "${client_cmd[@]}" >/dev/null 2>&1
 }

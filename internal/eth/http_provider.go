@@ -2,6 +2,7 @@ package eth
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,9 +26,7 @@ type httpProvider struct {
 	hc          httpDoer
 	maxRetries  int
 	backoffBase time.Duration
-	// simple in-memory block timestamp cache to avoid duplicate RPCs
-	blkMu sync.RWMutex
-	blkTS map[uint64]int64
+	blkCache    *timestampCache
 }
 
 // NewHTTPProvider constructs a JSON-RPC provider using the given http.Client (or a default one if nil).
@@ -38,7 +37,13 @@ func NewHTTPProvider(endpoint string, client *http.Client) (Provider, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &httpProvider{endpoint: endpoint, hc: client, maxRetries: 2, backoffBase: 100 * time.Millisecond, blkTS: make(map[uint64]int64)}, nil
+	return &httpProvider{
+		endpoint:    endpoint,
+		hc:          client,
+		maxRetries:  2,
+		backoffBase: 100 * time.Millisecond,
+		blkCache:    newTimestampCache(defaultBlockTimestampCacheSize, defaultBlockTimestampTTL),
+	}, nil
 }
 
 type rpcRequest struct {
@@ -58,6 +63,97 @@ type rpcResponse struct {
 	Result  json.RawMessage `json:"result"`
 	Error   *rpcError       `json:"error"`
 	ID      int64           `json:"id"`
+}
+
+const (
+	defaultBlockTimestampCacheSize = 2048
+	defaultBlockTimestampTTL       = 15 * time.Minute
+)
+
+type timestampCacheEntry struct {
+	key       uint64
+	value     int64
+	expiresAt time.Time
+}
+
+type timestampCache struct {
+	mu      sync.Mutex
+	max     int
+	ttl     time.Duration
+	entries map[uint64]*list.Element
+	ordered *list.List
+}
+
+func newTimestampCache(max int, ttl time.Duration) *timestampCache {
+	if max <= 0 {
+		max = defaultBlockTimestampCacheSize
+	}
+	if ttl <= 0 {
+		ttl = defaultBlockTimestampTTL
+	}
+	return &timestampCache{
+		max:     max,
+		ttl:     ttl,
+		entries: make(map[uint64]*list.Element, max),
+		ordered: list.New(),
+	}
+}
+
+func (c *timestampCache) get(block uint64, now time.Time) (int64, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el, ok := c.entries[block]; ok {
+		e := el.Value.(*timestampCacheEntry)
+		if !now.Before(e.expiresAt) {
+			c.removeElement(el)
+			return 0, false
+		}
+		c.ordered.MoveToFront(el)
+		return e.value, true
+	}
+	return 0, false
+}
+
+func (c *timestampCache) add(block uint64, value int64, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el, ok := c.entries[block]; ok {
+		e := el.Value.(*timestampCacheEntry)
+		e.value = value
+		e.expiresAt = now.Add(c.ttl)
+		c.ordered.MoveToFront(el)
+		return
+	}
+	entry := &timestampCacheEntry{key: block, value: value, expiresAt: now.Add(c.ttl)}
+	el := c.ordered.PushFront(entry)
+	c.entries[block] = el
+	c.evict(now)
+}
+
+func (c *timestampCache) evict(now time.Time) {
+	if c.ordered.Len() == 0 {
+		return
+	}
+	for el := c.ordered.Back(); el != nil; el = el.Prev() {
+		e := el.Value.(*timestampCacheEntry)
+		if now.Before(e.expiresAt) {
+			break
+		}
+		c.removeElement(el)
+	}
+	for c.ordered.Len() > c.max {
+		if el := c.ordered.Back(); el != nil {
+			c.removeElement(el)
+		} else {
+			break
+		}
+	}
+}
+
+func (c *timestampCache) removeElement(el *list.Element) {
+	entry := el.Value.(*timestampCacheEntry)
+	delete(c.entries, entry.key)
+	c.ordered.Remove(el)
 }
 
 func (p *httpProvider) call(ctx context.Context, method string, params interface{}, out interface{}) error {
@@ -299,13 +395,11 @@ func (p *httpProvider) TraceBlock(ctx context.Context, from, to uint64, address 
 
 // blockTimestampMillis fetches the block and returns timestamp in milliseconds.
 func (p *httpProvider) blockTimestampMillis(ctx context.Context, block uint64) (int64, error) {
-	// Cache check
-	p.blkMu.RLock()
-	if ts, ok := p.blkTS[block]; ok {
-		p.blkMu.RUnlock()
-		return ts, nil
+	if p.blkCache != nil {
+		if ts, ok := p.blkCache.get(block, time.Now()); ok {
+			return ts, nil
+		}
 	}
-	p.blkMu.RUnlock()
 	var blk struct {
 		Timestamp string `json:"timestamp"`
 	}
@@ -318,8 +412,8 @@ func (p *httpProvider) blockTimestampMillis(ctx context.Context, block uint64) (
 		return 0, err
 	}
 	ts := int64(sec) * 1000
-	p.blkMu.Lock()
-	p.blkTS[block] = ts
-	p.blkMu.Unlock()
+	if p.blkCache != nil {
+		p.blkCache.add(block, ts, time.Now())
+	}
 	return ts, nil
 }

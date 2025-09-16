@@ -12,9 +12,6 @@ CH_CLIENT_FLAGS=()
 if [[ -n "${CH_USER}" ]]; then
   CH_CLIENT_FLAGS+=(--user "${CH_USER}")
 fi
-if [[ -n "${CH_PASS}" ]]; then
-  CH_CLIENT_FLAGS+=(--password "${CH_PASS}")
-fi
 
 run_clickhouse() {
   local cmd=(clickhouse-client)
@@ -22,7 +19,12 @@ run_clickhouse() {
     cmd+=("${CH_CLIENT_FLAGS[@]}")
   fi
   cmd+=("$@")
-  "${cmd[@]}"
+  local password="${CH_PASS:-${CLICKHOUSE_PASSWORD:-}}"
+  if [[ -n "${password}" ]]; then
+    CLICKHOUSE_PASSWORD="${password}" "${cmd[@]}"
+  else
+    "${cmd[@]}"
+  fi
 }
 
 # Prefer sql/schema.sql if present, else fallback to sql/schema_dev.sql
@@ -59,6 +61,14 @@ if command -v docker >/dev/null 2>&1; then
     # Support overriding docker compose command via DOCKER_COMPOSE.
     read -r -a DOCKER_COMPOSE_CMD <<< "${DOCKER_COMPOSE:-docker compose}"
     docker_clickhouse_client() {
+      local password="${CH_PASS:-${CLICKHOUSE_PASSWORD:-}}"
+      local -a args=("${CH_CLIENT_FLAGS[@]}" "$@")
+      if [[ -n "${password}" ]]; then
+        "${DOCKER_COMPOSE_CMD[@]}" exec -T clickhouse \
+          sh -c 'IFS= read -r CLICKHOUSE_PASSWORD; export CLICKHOUSE_PASSWORD; exec clickhouse-client "$@"' \
+          clickhouse-client "${args[@]}" <<<"${password}"
+        return
+      fi
       local cmd=("${DOCKER_COMPOSE_CMD[@]}" exec -T clickhouse clickhouse-client)
       if ((${#CH_CLIENT_FLAGS[@]})); then
         cmd+=("${CH_CLIENT_FLAGS[@]}")
