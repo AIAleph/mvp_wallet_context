@@ -80,8 +80,7 @@ elif command -v clickhouse-client >/dev/null 2>&1; then
   run_clickhouse --database "${CH_DB}" -q "$SQL"
 elif command -v docker >/dev/null 2>&1 && docker compose ps --status=running >/dev/null 2>&1; then
   # Support overriding docker compose command via DOCKER_COMPOSE when running inside the container.
-  # shellcheck disable=SC2207
-  DOCKER_COMPOSE_CMD=($(echo "${DOCKER_COMPOSE:-docker compose}"))
+  read -r -a DOCKER_COMPOSE_CMD <<< "${DOCKER_COMPOSE:-docker compose}"
   docker_clickhouse_client() {
     local cmd=("${DOCKER_COMPOSE_CMD[@]}" exec -T clickhouse clickhouse-client)
     if ((${#CH_CLIENT_FLAGS[@]})); then

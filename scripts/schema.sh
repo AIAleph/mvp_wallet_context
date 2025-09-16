@@ -57,8 +57,7 @@ echo "clickhouse-client not found on host; trying docker compose exec..."
 if command -v docker >/dev/null 2>&1; then
   if docker compose ps --status=running >/dev/null 2>&1; then
     # Support overriding docker compose command via DOCKER_COMPOSE.
-    # shellcheck disable=SC2207
-    DOCKER_COMPOSE_CMD=($(echo "${DOCKER_COMPOSE:-docker compose}"))
+    read -r -a DOCKER_COMPOSE_CMD <<< "${DOCKER_COMPOSE:-docker compose}"
     docker_clickhouse_client() {
       local cmd=("${DOCKER_COMPOSE_CMD[@]}" exec -T clickhouse clickhouse-client)
       if ((${#CH_CLIENT_FLAGS[@]})); then
