@@ -142,11 +142,8 @@ func (c *timestampCache) evict(now time.Time) {
 		c.removeElement(el)
 	}
 	for c.ordered.Len() > c.max {
-		if el := c.ordered.Back(); el != nil {
-			c.removeElement(el)
-		} else {
-			break
-		}
+		el := c.ordered.Back()
+		c.removeElement(el)
 	}
 }
 
