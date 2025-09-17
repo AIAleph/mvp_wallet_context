@@ -102,7 +102,7 @@ jobs:
   codeql:
     name: CodeQL Security Scan
     runs-on: ubuntu-latest
-    if: vars.ENABLE_CODEQL == 'true'
+    if: ${{ vars.ENABLE_CODEQL == 'true' || secrets.ENABLE_CODEQL == 'true' }}
     permissions:
       actions: read
       contents: read
