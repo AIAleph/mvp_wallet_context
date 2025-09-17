@@ -64,3 +64,41 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("overrides not applied: %+v", cfg2)
 	}
 }
+
+func TestLoadClampsValues(t *testing.T) {
+	t.Setenv("SYNC_CONFIRMATIONS", "100000")
+	t.Setenv("BATCH_BLOCKS", "999999")
+	t.Setenv("RATE_LIMIT", "10000")
+	t.Setenv("INGEST_TIMEOUT", "7200s")
+	cfg := Load()
+	if cfg.SyncConfirmations != maxSyncConfirmations {
+		t.Fatalf("sync confirmations not clamped: %d", cfg.SyncConfirmations)
+	}
+	if cfg.BatchBlocks != maxBatchBlocks {
+		t.Fatalf("batch not clamped: %d", cfg.BatchBlocks)
+	}
+	if cfg.RateLimit != maxRateLimit {
+		t.Fatalf("rate limit not clamped: %d", cfg.RateLimit)
+	}
+	if cfg.Timeout != maxIngestTimeout {
+		t.Fatalf("timeout not clamped: %v", cfg.Timeout)
+	}
+
+	t.Setenv("RATE_LIMIT", "-5")
+	t.Setenv("BATCH_BLOCKS", "0")
+	t.Setenv("SYNC_CONFIRMATIONS", "-1")
+	t.Setenv("INGEST_TIMEOUT", "10ms")
+	cfg2 := Load()
+	if cfg2.RateLimit != minRateLimit {
+		t.Fatalf("negative rate limit not clamped: %d", cfg2.RateLimit)
+	}
+	if cfg2.BatchBlocks != minBatchBlocks {
+		t.Fatalf("batch lower bound not enforced: %d", cfg2.BatchBlocks)
+	}
+	if cfg2.SyncConfirmations != minSyncConfirmations {
+		t.Fatalf("sync confirmations lower bound not enforced: %d", cfg2.SyncConfirmations)
+	}
+	if cfg2.Timeout != minIngestTimeout {
+		t.Fatalf("timeout lower bound not enforced: %v", cfg2.Timeout)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"regexp"
@@ -18,11 +19,18 @@ import (
 	"github.com/AIAleph/mvp_wallet_context/internal/ingest"
 )
 
+const (
+	defaultMaxBatchBlocks = 20000
+	defaultMaxRateLimit   = 200
+)
+
 var (
 	// version is set via -ldflags "-X main.version=..."
 	version = "dev"
 	// exit is aliased to os.Exit to allow overriding in tests.
 	exit = os.Exit
+	// Precompiled regex for Ethereum addresses (0x-prefixed 40 hex chars).
+	addressRegex = regexp.MustCompile(`^0x[a-fA-F0-9]{40}$`)
 	// function variables allow tests to inject stubs
 	newIngest func(address string, opts ingest.Options) interface {
 		Backfill(context.Context) error
@@ -96,6 +104,30 @@ func parseDurEnv(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// hasInsecurePassword checks whether the DSN embeds credentials inline.
+func hasInsecurePassword(dsn string) bool {
+	if dsn == "" {
+		return false
+	}
+	if u, err := url.Parse(dsn); err == nil {
+		if u.User != nil {
+			if _, has := u.User.Password(); has {
+				return true
+			}
+		}
+		return false
+	}
+	if idx := strings.Index(dsn, "//"); idx >= 0 {
+		rest := dsn[idx+2:]
+		if at := strings.Index(rest, "@"); at > 0 {
+			if colon := strings.Index(rest[:at], ":"); colon > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // printUsage prints a detailed CLI help with env mappings and examples.
@@ -175,7 +207,7 @@ func main() {
 		exit(2)
 	}
 	// Basic address shape validation. Full EIP-55 checksum is enforced upstream.
-	if ok, _ := regexp.MatchString(`^0x[a-fA-F0-9]{40}$`, address); !ok {
+	if !addressRegex.MatchString(address) {
 		fmt.Fprintln(os.Stderr, "invalid --address; expected 0x-prefixed 40 hex chars")
 		exit(2)
 	}
@@ -197,11 +229,33 @@ func main() {
 		fmt.Fprintln(os.Stderr, "--batch must be > 0")
 		exit(2)
 	}
+	if batch > defaultMaxBatchBlocks {
+		fmt.Fprintf(os.Stderr, "--batch must be <= %d to avoid overwhelming the provider\n", defaultMaxBatchBlocks)
+		exit(2)
+	}
+	if rateLimit < 0 {
+		fmt.Fprintln(os.Stderr, "--rate-limit must be >= 0")
+		exit(2)
+	}
+	if rateLimit > defaultMaxRateLimit {
+		fmt.Fprintf(os.Stderr, "--rate-limit must be <= %d requests/second\n", defaultMaxRateLimit)
+		exit(2)
+	}
 	switch strings.ToLower(schemaMode) {
 	case "dev", "canonical":
 		// ok
 	default:
 		fmt.Fprintf(os.Stderr, "unknown --schema %q (use dev|canonical)\n", schemaMode)
+		exit(2)
+	}
+	var clickhouseFlagExplicit bool
+	flag.CommandLine.Visit(func(f *flag.Flag) {
+		if f.Name == "clickhouse" {
+			clickhouseFlagExplicit = true
+		}
+	})
+	if clickhouseFlagExplicit && hasInsecurePassword(chDSN) {
+		fmt.Fprintln(os.Stderr, "refusing to use --clickhouse with inline credentials; set CLICKHOUSE_DSN or CLICKHOUSE_PASS instead")
 		exit(2)
 	}
 

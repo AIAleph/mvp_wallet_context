@@ -536,6 +536,7 @@ describe('API server', () => {
       cache.set('d', 4, 1000, 0)
       expect(cache.get('d', 2001)).toBeUndefined()
       cache.prune(2001)
+      expect(() => cache.resize(0)).toThrow()
     })
 
     it('CoalescingMap coalesces concurrent factories', async () => {
@@ -548,6 +549,24 @@ describe('API server', () => {
       map.clear()
       await map.run('x', loader)
       expect(loader).toHaveBeenCalledTimes(2)
+    })
+
+    it('metrics helpers escape labels and accumulate', () => {
+      const { inc, labelKey, recordMetrics } = __testInternals as any
+      const metrics = new Map<string, number>()
+      inc(metrics, 'route:/health', 1)
+      inc(metrics, 'route:/health', 2)
+      expect(metrics.get('route:/health')).toBe(3)
+      const escaped = labelKey({ path: '"/\\test"', status: '200' })
+      expect(escaped).toContain('\"')
+      expect(escaped).toContain('\\\\')
+      expect(recordMetrics({ url: '/metrics' }, { statusCode: 200 })).toBeUndefined()
+      const key = recordMetrics({ method: 'POST', routeOptions: { url: '/foo' } }, { statusCode: 201 })
+      expect(typeof key).toBe('string')
+      const fallbackKey = recordMetrics({ method: 'PUT', url: undefined }, { statusCode: 204 })
+      expect(fallbackKey).toContain('route=""')
+      const defaultMethodKey = recordMetrics({ url: '/default' }, { statusCode: 200 })
+      expect(defaultMethodKey).toContain('method="GET"')
     })
 
     it('CircuitBreaker transitions across states', () => {
@@ -588,6 +607,36 @@ describe('API server', () => {
       ensureHealthCacheCapacity(3)
       ensureHealthCacheCapacity(3)
       ensureHealthCacheCapacity(0)
+      ensureHealthCacheCapacity(Number.NaN)
+      __resetHealthStateForTests()
+    })
+
+    it('BreakerRegistry enforces capacity and resizing', () => {
+      const { BreakerRegistry, ensureBreakerCapacity, getClickHouseBreaker } = __testInternals as any
+      expect(() => new BreakerRegistry(0)).toThrow()
+      const registry = new BreakerRegistry(2)
+      const a1 = registry.get('a', 1, 1000)
+      expect(registry.get('a', 1, 1000)).toBe(a1)
+      registry.get('b', 1, 1000)
+      registry.get('c', 1, 1000) // evicts 'a'
+      const a2 = registry.get('a', 1, 1000)
+      expect(a2).not.toBe(a1)
+      registry.resize(3)
+      const d = registry.get('d', 1, 1000)
+      expect(d).toBeInstanceOf(Object)
+      registry.resize(1)
+      expect(() => registry.resize(0)).toThrow()
+      registry.get('e', 1, 1000)
+      const base = loadConfig()
+      const cfg = {
+        ...base,
+        healthCircuitBreaker: { failureThreshold: 1, resetMs: 1000, maxEntries: 1 },
+      }
+      ensureBreakerCapacity(1)
+      ensureBreakerCapacity(Number.NaN)
+      const breaker1 = getClickHouseBreaker(cfg, 'x')
+      const breaker2 = getClickHouseBreaker(cfg, 'y')
+      expect(breaker2).not.toBe(breaker1)
       __resetHealthStateForTests()
     })
 
@@ -596,19 +645,73 @@ describe('API server', () => {
       const base = loadConfig()
       const cfg = {
         ...base,
-        healthCircuitBreaker: { failureThreshold: 1, resetMs: 1000 },
+        healthCircuitBreaker: { failureThreshold: 1, resetMs: 1000, maxEntries: 4 },
       }
       const breaker1 = getClickHouseBreaker(cfg, 'dsn')
       const breaker2 = getClickHouseBreaker(cfg, 'dsn')
       expect(breaker1).toBe(breaker2)
       const cfg2 = {
         ...cfg,
-        healthCircuitBreaker: { failureThreshold: 2, resetMs: 2000 },
+        healthCircuitBreaker: { failureThreshold: 2, resetMs: 2000, maxEntries: 4 },
       }
       const breaker3 = getClickHouseBreaker(cfg2, 'dsn')
       expect(breaker3).not.toBe(breaker1)
       const defaultKeyBreaker = getClickHouseBreaker(cfg2, '')
       expect(defaultKeyBreaker).toBeDefined()
+      __resetHealthStateForTests()
+    })
+
+    it('buildClickHouseDSN and sanitizeDSNForRequest handle credentials', () => {
+      const { buildClickHouseDSN, sanitizeDSNForRequest, redactDSN } = __testInternals as any
+      const base = loadConfig()
+      const cfg = {
+        ...base,
+        clickhouse: { url: 'http://user:pass@localhost:8123', db: 'wallets', user: 'alice', pass: 'secret', dsn: '' },
+      }
+      const dsn = buildClickHouseDSN(cfg)
+      expect(dsn.endsWith('/wallets')).toBe(true)
+      const cfgWithDb = {
+        ...cfg,
+        clickhouse: { url: 'http://localhost:8123/wallets', db: 'wallets', user: '', pass: '', dsn: '' },
+      }
+      expect(buildClickHouseDSN(cfgWithDb)).toBe('http://localhost:8123/wallets')
+      const sanitized = sanitizeDSNForRequest('http://bob:pw@localhost:8123/db', cfg)
+      expect(sanitized.url).not.toContain('bob:pw')
+      expect(sanitized.authHeader).toMatch(/^Basic /)
+      const fallback = sanitizeDSNForRequest('http://localhost:8123/db', cfg)
+      expect(fallback.authHeader).toMatch(/^Basic /)
+      const plain = sanitizeDSNForRequest('http://localhost:8123/db', cfgWithDb)
+      expect(plain.authHeader).toBeUndefined()
+      const missingUser = sanitizeDSNForRequest('http://:pw@localhost:8123/db', cfgWithDb)
+      expect(missingUser.url).toBe('http://localhost:8123/db')
+      const invalid = sanitizeDSNForRequest('::::', cfg)
+      expect(invalid.url).toBe('::::')
+      expect(invalid.authHeader).toBeUndefined()
+      expect(redactDSN('http://bob:pw@localhost/db')).toBe('http://bob:***@localhost/db')
+      expect(redactDSN('http://:pw@localhost/db')).toBe('http://***:***@localhost/db')
+      expect(redactDSN('foo//bob:pw@host')).toBe('foo//bob:***@host')
+      expect(redactDSN('foo//:pw@host')).toBe('foo//***:***@host')
+      expect(redactDSN('http://localhost/db')).toBe('http://localhost/db')
+      expect(redactDSN('plaintext')).toBe('plaintext')
+      expect(redactDSN('')).toBe('')
+    })
+
+    it('fetchWithTimeout wraps fetch with AbortSignal timeout', async () => {
+      const { fetchWithTimeout } = __testInternals as any
+      const origFetch = globalThis.fetch
+      const spy = vi.fn(async (_input: any, init?: RequestInit) => {
+        expect(init?.signal).toBeInstanceOf(AbortSignal)
+        expect(init?.headers).toEqual({ Authorization: 'Basic abc' })
+        return { ok: true, status: 200 } as any
+      })
+      ;(globalThis as any).fetch = spy
+      try {
+        const res = await fetchWithTimeout(new URL('http://localhost/ping'), 50, 'Basic abc')
+        expect(spy).toHaveBeenCalledTimes(1)
+        expect(res.ok).toBe(true)
+      } finally {
+        ;(globalThis as any).fetch = origFetch
+      }
     })
   })
 
@@ -635,6 +738,17 @@ describe('API server', () => {
     expect(body).toMatch(/http_requests_total\{.*route="\/health".*status="200".*\} \d+/)
     expect(body).toContain('process_resident_memory_bytes')
     expect(body).toContain('process_uptime_seconds')
+  })
+
+  it('GET /metrics handles empty counters', async () => {
+    __resetHealthStateForTests()
+    const empty = await app.inject({ method: 'GET', url: '/metrics' })
+    expect(empty.statusCode).toBe(200)
+    expect(empty.body).toContain('# TYPE http_requests_total counter')
+    await app.inject({ method: 'GET', url: '/health' })
+    const populated = await app.inject({ method: 'GET', url: '/metrics' })
+    expect(populated.statusCode).toBe(200)
+    expect(populated.body).toMatch(/http_requests_total\{.*route="\/health".*\} \d+/)
   })
 
   it('start() readies the app and can close', async () => {

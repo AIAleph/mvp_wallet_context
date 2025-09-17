@@ -63,4 +63,38 @@ describe('config env parsing', () => {
     cfg = loadConfig()
     expect(cfg.healthDebug).toBe(false)
   })
+
+  it('clamps health config extremes', async () => {
+    process.env.HEALTH_CACHE_CAPACITY = '9999'
+    process.env.HEALTH_RATE_LIMIT_RPS = '500'
+    process.env.HEALTH_PING_TIMEOUT_MS = '999999'
+    process.env.HEALTH_CACHE_TTL_MS = '9999999'
+    process.env.HEALTH_CIRCUIT_BREAKER_FAILURES = '50'
+    process.env.HEALTH_CIRCUIT_BREAKER_RESET_MS = '9999999'
+    process.env.HEALTH_BREAKER_CAPACITY = '999'
+    let cfg = loadConfig()
+    expect(cfg.healthCacheCapacity).toBe(256)
+    expect(cfg.healthRateLimitRps).toBe(50)
+    expect(cfg.healthPingTimeoutMs).toBe(60000)
+    expect(cfg.healthCacheTtlMs).toBe(300000)
+    expect(cfg.healthCircuitBreaker.failureThreshold).toBe(10)
+    expect(cfg.healthCircuitBreaker.resetMs).toBe(300000)
+    expect(cfg.healthCircuitBreaker.maxEntries).toBe(256)
+
+    process.env.HEALTH_CACHE_CAPACITY = '0'
+    process.env.HEALTH_RATE_LIMIT_RPS = '-1'
+    process.env.HEALTH_PING_TIMEOUT_MS = '-5'
+    process.env.HEALTH_CACHE_TTL_MS = '-50'
+    process.env.HEALTH_CIRCUIT_BREAKER_FAILURES = '-5'
+    process.env.HEALTH_CIRCUIT_BREAKER_RESET_MS = '-10'
+    process.env.HEALTH_BREAKER_CAPACITY = '-3'
+    cfg = loadConfig()
+    expect(cfg.healthCacheCapacity).toBe(1)
+    expect(cfg.healthRateLimitRps).toBe(0)
+    expect(cfg.healthPingTimeoutMs).toBe(100)
+    expect(cfg.healthCacheTtlMs).toBe(0)
+    expect(cfg.healthCircuitBreaker.failureThreshold).toBe(0)
+    expect(cfg.healthCircuitBreaker.resetMs).toBe(0)
+    expect(cfg.healthCircuitBreaker.maxEntries).toBe(1)
+  })
 })

@@ -1,7 +1,4 @@
--- Canonical ClickHouse schema for MVP Wallet Intelligence
--- Use UTC DateTime64(3) and ReplacingMergeTree for idempotent upserts.
-
--- Logs (events)
+-- v2: Canonical ClickHouse schema for MVP Wallet Intelligence
 CREATE TABLE IF NOT EXISTS logs (
   event_uid String,
   tx_hash String,
@@ -12,7 +9,6 @@ CREATE TABLE IF NOT EXISTS logs (
   block_number UInt64,
   ts DateTime64(3, 'UTC'),
   ingested_at DateTime64(3, 'UTC') DEFAULT now64(3),
-  -- Data skipping indexes for common filters (ClickHouse requires these inside column list)
   INDEX idx_logs_address address TYPE bloom_filter GRANULARITY 2,
   INDEX idx_logs_block block_number TYPE minmax GRANULARITY 1,
   CONSTRAINT logs_address_chk CHECK match(address, '^0x[0-9a-fA-F]{40}$')
@@ -20,7 +16,6 @@ CREATE TABLE IF NOT EXISTS logs (
 ORDER BY (tx_hash, log_index)
 SETTINGS index_granularity = 8192;
 
--- Internal traces
 CREATE TABLE IF NOT EXISTS traces (
   trace_uid String,
   tx_hash String,
@@ -40,7 +35,6 @@ CREATE TABLE IF NOT EXISTS traces (
 ORDER BY (tx_hash, trace_id)
 SETTINGS index_granularity = 8192;
 
--- Token transfers (ERC-20/721/1155)
 CREATE TABLE IF NOT EXISTS token_transfers (
   event_uid String,
   tx_hash String,
@@ -65,7 +59,6 @@ CREATE TABLE IF NOT EXISTS token_transfers (
 ORDER BY (tx_hash, log_index, token_id)
 SETTINGS index_granularity = 4096;
 
--- Approvals (ERC-20/721/1155)
 CREATE TABLE IF NOT EXISTS approvals (
   event_uid String,
   tx_hash String,
@@ -91,7 +84,6 @@ CREATE TABLE IF NOT EXISTS approvals (
 ORDER BY (tx_hash, log_index)
 SETTINGS index_granularity = 4096;
 
--- Addresses sync checkpoints
 CREATE TABLE IF NOT EXISTS addresses (
   address String,
   last_synced_block UInt64,
@@ -105,7 +97,6 @@ CREATE TABLE IF NOT EXISTS addresses (
 ORDER BY (address)
 SETTINGS index_granularity = 2048;
 
--- Contracts registry and metadata
 CREATE TABLE IF NOT EXISTS contracts (
   address String,
   is_contract UInt8,
@@ -122,7 +113,6 @@ CREATE TABLE IF NOT EXISTS contracts (
 ORDER BY (address)
 SETTINGS index_granularity = 2048;
 
--- Label registry (curated + imported)
 CREATE TABLE IF NOT EXISTS labels (
   address String,
   label String,
@@ -136,10 +126,9 @@ CREATE TABLE IF NOT EXISTS labels (
 ORDER BY (address, label)
 SETTINGS index_granularity = 2048;
 
--- Embeddings for semantic search (address/token/contract/label)
 CREATE TABLE IF NOT EXISTS embeddings (
-  entity_kind LowCardinality(String), -- address|token|contract|label
-  entity_id String,                   -- e.g., address or symbol
+  entity_kind LowCardinality(String),
+  entity_id String,
   model String,
   dim UInt16,
   embedding Array(Float32),
@@ -148,7 +137,6 @@ CREATE TABLE IF NOT EXISTS embeddings (
 ORDER BY (entity_kind, entity_id)
 SETTINGS index_granularity = 2048;
 
--- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
   version UInt32,
   applied_at DateTime64(3, 'UTC') DEFAULT now64(3),

@@ -20,16 +20,33 @@ var httpNewRequest = http.NewRequestWithContext
 type Client struct {
 	endpoint string
 	hc       *http.Client
+	reqTimeout time.Duration
 }
 
 // New creates a Client from a ClickHouse DSN (e.g., http://user:pass@host:8123/db).
 // If dsn is empty, the client operates in no-op mode (writes are skipped).
 func New(dsn string) *Client {
+	transport := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		MaxIdleConns:        64,
+		MaxIdleConnsPerHost: 32,
+		MaxConnsPerHost:     64,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	hc := &http.Client{Timeout: 0, Transport: transport}
 	if dsn == "" {
-		return &Client{endpoint: "", hc: &http.Client{Timeout: 10 * time.Second}}
+		return &Client{endpoint: "", hc: hc, reqTimeout: 10 * time.Second}
 	}
 	// Keep DSN as-is; assume it includes DB path and credentials if any.
-	return &Client{endpoint: dsn, hc: &http.Client{Timeout: 10 * time.Second}}
+	return &Client{endpoint: dsn, hc: hc, reqTimeout: 10 * time.Second}
+}
+
+func (c *Client) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, c.reqTimeout)
 }
 
 func (c *Client) Ping(ctx context.Context) error {
@@ -50,7 +67,9 @@ func (c *Client) Ping(ctx context.Context) error {
 	u.RawQuery = q.Encode()
 	// Build a fresh request on each attempt
 	return doWithRetry(ctx, func() error {
-		req, err := httpNewRequest(ctx, http.MethodGet, u.String(), nil)
+		reqCtx, cancel := c.requestContext(ctx)
+		defer cancel()
+		req, err := httpNewRequest(reqCtx, http.MethodGet, u.String(), nil)
 		if err != nil {
 			return err
 		}
@@ -99,7 +118,9 @@ func (c *Client) InsertJSONEachRow(ctx context.Context, table string, rows []any
 	u.RawQuery = q.Encode()
 	payload := append([]byte(nil), buf.Bytes()...)
 	return doWithRetry(ctx, func() error {
-		req, err := httpNewRequest(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
+		reqCtx, cancel := c.requestContext(ctx)
+		defer cancel()
+		req, err := httpNewRequest(reqCtx, http.MethodPost, u.String(), bytes.NewReader(payload))
 		if err != nil {
 			return err
 		}

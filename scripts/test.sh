@@ -1,27 +1,67 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-command -v go >/dev/null 2>&1 || { echo "go not found in PATH" >&2; exit 1; }
-command -v python3 >/dev/null 2>&1 || { echo "python3 not found in PATH" >&2; exit 1; }
-command -v npm >/dev/null 2>&1 || { echo "npm not found in PATH" >&2; exit 1; }
+status=0
 
-echo "[1/3] Go tests + coverage..."
-GOCACHE="$(pwd)/.gocache" GOMODCACHE="$(pwd)/.gocache/mod" GOPATH="$(pwd)/.gocache/gopath" \
-  go test -race -covermode=atomic -coverprofile=coverage.out ./...
-python3 tools/check_go_coverage.py coverage.out
+run_step() {
+  local label="$1"
+  shift
+  echo "${label}"
+  if ! ( set -euo pipefail; "$@" ); then
+    local rc=$?
+    echo "${label} failed (exit ${rc})" >&2
+    status=1
+  else
+    echo "${label} ok"
+  fi
+}
 
-echo "[2/3] API tests (Vitest)..."
-pushd api >/dev/null
-if [[ ! -d node_modules ]]; then
-  echo "Installing API dependencies (npm ci)..."
-  npm ci
+require_tool() {
+  local bin="$1"
+  if ! command -v "${bin}" >/dev/null 2>&1; then
+    echo "${bin} not found in PATH" >&2
+    return 1
+  fi
+}
+
+go_tests() {
+  require_tool go
+  require_tool python3
+  local go_cache_root="$(pwd)/.gocache"
+  GOCACHE="${go_cache_root}" \
+    GOMODCACHE="${go_cache_root}/mod" \
+    GOPATH="${go_cache_root}/gopath" \
+    go test -race -covermode=atomic -coverprofile=coverage.out ./...
+  python3 tools/check_go_coverage.py coverage.out
+}
+
+ts_tests() {
+  require_tool npm
+  pushd api >/dev/null
+  if [[ ! -d node_modules ]]; then
+    echo "Installing API dependencies (npm ci)..."
+    npm ci
+  fi
+  npm run test
+  popd >/dev/null
+}
+
+python_tests() {
+  require_tool python3
+  require_tool pytest
+  pushd tools >/dev/null
+  pytest --cov=apply_priority --cov=create_github_issues --cov=check_go_coverage --cov-fail-under=100 -q
+  popd >/dev/null
+}
+
+run_step "[check] Go tests + coverage" go_tests
+run_step "[check] API tests (Vitest)" ts_tests
+run_step "[check] Python tools tests" python_tests
+
+if (( status != 0 )); then
+  echo "Some test suites failed." >&2
+else
+  echo "All tests passed."
 fi
-npm run test
-popd >/dev/null
 
-echo "[3/3] Python tools tests..."
-pushd tools >/dev/null
-pytest --cov=apply_priority --cov=create_github_issues --cov=check_go_coverage --cov-fail-under=100 -q
-popd >/dev/null
-
-echo "All tests passed."
+exit ${status}

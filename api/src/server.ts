@@ -10,10 +10,11 @@ export const app = Fastify({ logger: true })
 
 class TimedLRUCache<K, V> {
   #store = new Map<K, { value: V; expiresAt: number }>()
-  constructor(private readonly capacity: number) {
+  constructor(private capacity: number) {
     if (!Number.isFinite(capacity) || capacity <= 0) {
       throw new Error('TimedLRUCache capacity must be positive')
     }
+    this.capacity = Math.floor(capacity)
   }
 
   get(key: K, now = Date.now()): V | undefined {
@@ -38,12 +39,16 @@ class TimedLRUCache<K, V> {
       this.#store.delete(key)
     }
     this.#store.set(key, { value, expiresAt: now + ttlMs })
-    while (this.#store.size > this.capacity) {
-      const oldestKey = this.#store.keys().next().value
-      /* c8 ignore next */
-      if (oldestKey === undefined) break
-      this.#store.delete(oldestKey)
+    this.#trimToCapacity()
+  }
+
+  resize(capacity: number, now = Date.now()): void {
+    if (!Number.isFinite(capacity) || capacity <= 0) {
+      throw new Error('TimedLRUCache capacity must be positive')
     }
+    this.capacity = Math.floor(capacity)
+    this.prune(now)
+    this.#trimToCapacity()
   }
 
   prune(now = Date.now()): void {
@@ -51,6 +56,13 @@ class TimedLRUCache<K, V> {
       if (entry.expiresAt <= now) {
         this.#store.delete(key)
       }
+    }
+  }
+
+  #trimToCapacity(): void {
+    while (this.#store.size > this.capacity) {
+      const oldestKey = this.#store.keys().next().value
+      this.#store.delete(oldestKey)
     }
   }
 }
@@ -128,7 +140,48 @@ class CircuitBreaker {
   }
 }
 
+class BreakerRegistry {
+  #store = new Map<string, { breaker: CircuitBreaker; threshold: number; resetMs: number }>()
+  constructor(private capacity: number) {
+    if (!Number.isFinite(capacity) || capacity <= 0) {
+      throw new Error('BreakerRegistry capacity must be positive')
+    }
+    this.capacity = Math.floor(capacity)
+  }
+
+  get(key: string, threshold: number, resetMs: number): CircuitBreaker {
+    const existing = this.#store.get(key)
+    if (existing && existing.threshold === threshold && existing.resetMs === resetMs) {
+      return existing.breaker
+    }
+    const breaker = new CircuitBreaker(threshold, resetMs)
+    this.#store.set(key, { breaker, threshold, resetMs })
+    this.#trimToCapacity()
+    return breaker
+  }
+
+  resize(capacity: number): void {
+    if (!Number.isFinite(capacity) || capacity <= 0) {
+      throw new Error('BreakerRegistry capacity must be positive')
+    }
+    this.capacity = Math.floor(capacity)
+    this.#trimToCapacity()
+  }
+
+  clear(): void {
+    this.#store.clear()
+  }
+
+  #trimToCapacity(): void {
+    while (this.#store.size > this.capacity) {
+      const oldestKey = this.#store.keys().next().value
+      this.#store.delete(oldestKey)
+    }
+  }
+}
+
 const DEFAULT_HEALTH_CACHE_CAPACITY = 8
+const DEFAULT_HEALTH_BREAKER_CAPACITY = 16
 type HealthSummaryStatus = 'ok' | 'degraded'
 type HealthPingState = { at: number; ok: boolean }
 type CachedHealthPayload = { body: { status: HealthSummaryStatus; clickhouse: ClickHouseHealth }; statusCode: number }
@@ -136,34 +189,39 @@ type CachedHealthPayload = { body: { status: HealthSummaryStatus; clickhouse: Cl
 let healthPingCache = new TimedLRUCache<string, HealthPingState>(DEFAULT_HEALTH_CACHE_CAPACITY)
 let healthPayloadCache = new TimedLRUCache<string, CachedHealthPayload>(DEFAULT_HEALTH_CACHE_CAPACITY)
 let currentHealthCacheCapacity = DEFAULT_HEALTH_CACHE_CAPACITY
+let breakerRegistry = new BreakerRegistry(DEFAULT_HEALTH_BREAKER_CAPACITY)
+let currentHealthBreakerCapacity = DEFAULT_HEALTH_BREAKER_CAPACITY
 
 const healthPingCoalescer = new CoalescingMap<string, void>()
 const healthPayloadCoalescer = new CoalescingMap<string, CachedHealthPayload>()
-const clickhouseBreakers = new Map<string, { breaker: CircuitBreaker; threshold: number; resetMs: number }>()
 
 function ensureHealthCacheCapacity(capacity: number): void {
   let next = Number.isFinite(capacity) && capacity > 0 ? Math.floor(capacity) : DEFAULT_HEALTH_CACHE_CAPACITY
   if (next === currentHealthCacheCapacity) {
     return
   }
-  healthPingCache = new TimedLRUCache<string, HealthPingState>(next)
-  healthPayloadCache = new TimedLRUCache<string, CachedHealthPayload>(next)
+  healthPingCache.resize(next)
+  healthPayloadCache.resize(next)
   currentHealthCacheCapacity = next
 }
 
+function ensureBreakerCapacity(capacity: number): void {
+  const next = Number.isFinite(capacity) && capacity > 0 ? Math.floor(capacity) : DEFAULT_HEALTH_BREAKER_CAPACITY
+  if (next === currentHealthBreakerCapacity) {
+    return
+  }
+  breakerRegistry.resize(next)
+  currentHealthBreakerCapacity = next
+}
+
 function getClickHouseBreaker(cfg: AppConfig, key: string): CircuitBreaker | undefined {
-  const { failureThreshold, resetMs } = cfg.healthCircuitBreaker
+  const { failureThreshold, resetMs, maxEntries } = cfg.healthCircuitBreaker
   if (failureThreshold <= 0 || resetMs <= 0) {
     return undefined
   }
+  ensureBreakerCapacity(maxEntries)
   const mapKey = key || 'default'
-  const existing = clickhouseBreakers.get(mapKey)
-  if (existing && existing.threshold === failureThreshold && existing.resetMs === resetMs) {
-    return existing.breaker
-  }
-  const breaker = new CircuitBreaker(failureThreshold, resetMs)
-  clickhouseBreakers.set(mapKey, { breaker, threshold: failureThreshold, resetMs })
-  return breaker
+  return breakerRegistry.get(mapKey, failureThreshold, resetMs)
 }
 
 function sanitizeHealthError(err: unknown): string {
@@ -188,42 +246,70 @@ export function __resetHealthStateForTests() {
   currentHealthCacheCapacity = DEFAULT_HEALTH_CACHE_CAPACITY
   healthPingCoalescer.clear()
   healthPayloadCoalescer.clear()
-  clickhouseBreakers.clear()
+  breakerRegistry.clear()
+  breakerRegistry = new BreakerRegistry(DEFAULT_HEALTH_BREAKER_CAPACITY)
+  currentHealthBreakerCapacity = DEFAULT_HEALTH_BREAKER_CAPACITY
+  httpRequestsTotal.clear()
 }
 
 export const __testInternals = {
   TimedLRUCache,
   CoalescingMap,
   CircuitBreaker,
+  BreakerRegistry,
   sanitizeHealthError,
   ensureHealthCacheCapacity,
+  ensureBreakerCapacity,
   getClickHouseBreaker,
+  inc,
+  labelKey,
+  recordMetrics,
+  buildClickHouseDSN,
+  sanitizeDSNForRequest,
+  fetchWithTimeout,
+  redactDSN,
 }
 
 // Prometheus-style metrics (lightweight, no external deps)
 type Counter = Map<string, number>
 const httpRequestsTotal: Counter = new Map()
-const inc = (m: Counter, key: string, v = 1) => m.set(key, (m.get(key) ?? 0) + v)
-const labelKey = (labels: Record<string, string>) =>
-  '{' + Object.entries(labels).map(([k, v]) => `${k}="${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`).join(',') + '}'
+function inc(m: Counter, key: string, v = 1) {
+  m.set(key, (m.get(key) ?? 0) + v)
+}
+function labelKey(labels: Record<string, string>) {
+  return (
+    '{' +
+    Object.entries(labels)
+      .map(([k, v]) => `${k}="${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
+      .join(',') +
+    '}'
+  )
+}
+
+function recordMetrics(
+  req: { url?: string; method?: string; routeOptions?: { url?: string } },
+  reply: { statusCode: number },
+) {
+  if ((req.url || '').startsWith('/metrics')) {
+    return undefined
+  }
+  const route = req.routeOptions?.url || req.url || ''
+  const key = labelKey({ method: req.method ?? 'GET', route, status: String(reply.statusCode) })
+  inc(httpRequestsTotal, key)
+  return key
+}
 
 app.addHook('onResponse', async (req, reply) => {
-  // Skip counting metrics endpoint itself to avoid recursion
-  /* c8 ignore next */
-  if ((req.url || '').startsWith('/metrics')) return
-  /* c8 ignore next */
-  const route = (req as any).routeOptions?.url || req.url || ''
-  const key = labelKey({ method: req.method, route, status: String(reply.statusCode) })
-  inc(httpRequestsTotal, key)
+  recordMetrics(req as any, reply as any)
 })
 
 app.get('/metrics', async (_req, reply) => {
   const lines: string[] = []
   lines.push('# HELP http_requests_total Total HTTP requests')
   lines.push('# TYPE http_requests_total counter')
-  for (const [k, v] of httpRequestsTotal.entries()) {
-    lines.push(`http_requests_total${k} ${v}`)
-  }
+  /* c8 ignore next */
+  const totals = Array.from(httpRequestsTotal.entries(), ([k, v]) => `http_requests_total${k} ${v}`)
+  lines.push(...totals)
   const mem = process.memoryUsage()
   lines.push('# HELP process_resident_memory_bytes Resident memory size')
   lines.push('# TYPE process_resident_memory_bytes gauge')
@@ -377,7 +463,6 @@ app.get('/healthz', async (req, reply) => {
       ch.error = sanitizeHealthError(err)
       breaker?.recordFailure(startedAt)
       const logErr = err instanceof Error ? err.message : String(err)
-      /* c8 ignore next */
       app.log.warn({ err: logErr, dsn: redactDSN(dsn) }, 'clickhouse healthz error')
     }
     const status: HealthSummaryStatus = ch.ok ? 'ok' : 'degraded'
@@ -388,7 +473,6 @@ app.get('/healthz', async (req, reply) => {
   return reply.code(result.statusCode).send(result.body)
 })
 
-/* c8 ignore start */
 function buildClickHouseDSN(cfg: ReturnType<typeof loadConfig>): string {
   const dsn = cfg.clickhouse.dsn
   if (dsn) return dsn
@@ -432,23 +516,15 @@ function sanitizeDSNForRequest(dsn: string, cfg: ReturnType<typeof loadConfig>):
 }
 
 async function fetchWithTimeout(u: URL, timeoutMs: number, authHeader?: string): Promise<Response> {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-  try {
-    return await fetch(u, {
-      method: 'GET',
-      signal: ctrl.signal,
-      headers: authHeader ? { Authorization: authHeader } : undefined,
-    })
-  } finally {
-    clearTimeout(timer)
-    if (!ctrl.signal.aborted) {
-      ctrl.abort()
-    }
-  }
+  const boundedTimeout = Math.max(1, Math.floor(timeoutMs))
+  const signal = AbortSignal.timeout(boundedTimeout)
+  return fetch(u, {
+    method: 'GET',
+    signal,
+    headers: authHeader ? { Authorization: authHeader } : undefined,
+  })
 }
 // Redact credentials in DSN-like URLs for safe logging
-/* c8 ignore start */
 function redactDSN(s: string): string {
   if (!s) return s
   try {
@@ -469,8 +545,6 @@ function redactDSN(s: string): string {
     return s
   }
 }
-/* c8 ignore stop */
-/* c8 ignore stop */
 
 app.post('/v1/address/:address/sync', async (req, reply) => {
   const schema = z.object({ address: z.string().regex(/^0x[a-fA-F0-9]{40}$/) })
