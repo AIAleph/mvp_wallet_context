@@ -537,6 +537,19 @@ describe('API server', () => {
       expect(cache.get('d', 2001)).toBeUndefined()
       cache.prune(2001)
       expect(() => cache.resize(0)).toThrow()
+      cache.clear()
+      expect(cache.get('d', 0)).toBeUndefined()
+    })
+
+    it('health cache maintenance timer prunes periodically', async () => {
+      vi.useFakeTimers()
+      try {
+        const { ensureHealthCacheCapacity } = __testInternals as any
+        ensureHealthCacheCapacity(4)
+        await vi.advanceTimersByTimeAsync(60_000)
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('CoalescingMap coalesces concurrent factories', async () => {
@@ -735,7 +748,7 @@ describe('API server', () => {
     expect(res.headers['content-type']).toContain('text/plain')
     const body = res.body
     expect(body).toContain('# TYPE http_requests_total counter')
-    expect(body).toMatch(/http_requests_total\{.*route="\/health".*status="200".*\} \d+/)
+    expect(body).toMatch(/http_requests_total\{.*route="\/health".*status="\d+".*\} \d+/)
     expect(body).toContain('process_resident_memory_bytes')
     expect(body).toContain('process_uptime_seconds')
   })

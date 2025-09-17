@@ -111,7 +111,7 @@ func TestDelta_ProviderError_AndDefaultBatch(t *testing.T) {
 
 func TestProcessRange_ErrorPaths_TokenApprovalsAndTraces(t *testing.T) {
 	// Override default transport so ClickHouse HTTP sees our stub.
-	ing := NewWithProvider("0xabc", Options{ClickHouseDSN: "http://localhost:8123/db"}, provMixed{})
+	ing := NewWithProvider("0xabc", Options{ClickHouseDSN: "http://localhost:8123/db", Schema: "dev"}, provMixed{})
 	ing.ch.SetTransport(roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		u, _ := url.Parse(r.URL.String())
 		q := u.Query().Get("query")
@@ -127,7 +127,7 @@ func TestProcessRange_ErrorPaths_TokenApprovalsAndTraces(t *testing.T) {
 	}
 
 	// Change stub to fail on approvals insert to hit that path; traces still fail too.
-	ing2 := NewWithProvider("0xabc", Options{ClickHouseDSN: "http://localhost:8123/db"}, provOnlyApproval{})
+	ing2 := NewWithProvider("0xabc", Options{ClickHouseDSN: "http://localhost:8123/db", Schema: "dev"}, provOnlyApproval{})
 	ing2.ch.SetTransport(roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		u, _ := url.Parse(r.URL.String())
 		q := u.Query().Get("query")
@@ -141,7 +141,7 @@ func TestProcessRange_ErrorPaths_TokenApprovalsAndTraces(t *testing.T) {
 	}
 
 	// Finally, ensure traces insert error path executes. Provide empty logs and traces non-empty.
-	ing3 := NewWithProvider("0xabc", Options{ClickHouseDSN: "http://localhost:8123/db"}, provOnlyTrace{})
+	ing3 := NewWithProvider("0xabc", Options{ClickHouseDSN: "http://localhost:8123/db", Schema: "dev"}, provOnlyTrace{})
 	ing3.ch.SetTransport(roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		u, _ := url.Parse(r.URL.String())
 		q := u.Query().Get("query")

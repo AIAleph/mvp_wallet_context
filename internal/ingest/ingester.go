@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,6 +11,23 @@ import (
 	"github.com/AIAleph/mvp_wallet_context/internal/normalize"
 	"github.com/AIAleph/mvp_wallet_context/pkg/ch"
 )
+
+const DefaultSchemaMode = "canonical"
+
+// NormalizeSchema standardizes the ingestion schema selection.
+// Accepts "canonical" (default) and "dev"; rejects other inputs.
+func NormalizeSchema(schema string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(schema))
+	if mode == "" {
+		return DefaultSchemaMode, nil
+	}
+	switch mode {
+	case "canonical", "dev":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid schema mode %q", schema)
+	}
+}
 
 // Options configure a run of the ingester.
 type Options struct {
@@ -39,6 +57,7 @@ type Ingester struct {
 }
 
 func New(address string, opts Options) *Ingester {
+	opts = mustNormalizeOptions(opts)
 	var c *ch.Client
 	if opts.ClickHouseDSN != "" {
 		c = ch.New(opts.ClickHouseDSN)
@@ -51,6 +70,7 @@ func New(address string, opts Options) *Ingester {
 // NewWithProvider injects a concrete eth.Provider (already wrapped with
 // rate-limiter, retries, etc.). Prefer this in production wiring.
 func NewWithProvider(address string, opts Options, p eth.Provider) *Ingester {
+	opts = mustNormalizeOptions(opts)
 	var c *ch.Client
 	if opts.ClickHouseDSN != "" {
 		c = ch.New(opts.ClickHouseDSN)
@@ -294,16 +314,16 @@ func (i *Ingester) getBlockTs(ctx context.Context, block uint64) (int64, bool) {
 
 // SchemaMode returns the normalized schema mode (dev or canonical).
 func (i *Ingester) SchemaMode() string {
-	m := i.opts.Schema
-	if m == "" {
-		return "dev"
+	return i.opts.Schema
+}
+
+func mustNormalizeOptions(opts Options) Options {
+	mode, err := NormalizeSchema(opts.Schema)
+	if err != nil {
+		panic(err)
 	}
-	switch m {
-	case "dev", "canonical":
-		return m
-	default:
-		return "dev"
-	}
+	opts.Schema = mode
+	return opts
 }
 
 // fmtDT64 formats milliseconds since epoch to ClickHouse-compatible DateTime64(3) string (UTC).

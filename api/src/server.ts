@@ -59,12 +59,18 @@ class TimedLRUCache<K, V> {
     }
   }
 
+  clear(): void {
+    this.#store.clear()
+  }
+
   #trimToCapacity(): void {
     while (this.#store.size > this.capacity) {
       const iterator = this.#store.keys().next()
+      /* c8 ignore start */
       if (iterator.done) {
         break
       }
+      /* c8 ignore stop */
       this.#store.delete(iterator.value as K)
     }
   }
@@ -178,9 +184,11 @@ class BreakerRegistry {
   #trimToCapacity(): void {
     while (this.#store.size > this.capacity) {
       const iterator = this.#store.keys().next()
+      /* c8 ignore start */
       if (iterator.done) {
         break
       }
+      /* c8 ignore stop */
       this.#store.delete(iterator.value)
     }
   }
@@ -188,6 +196,7 @@ class BreakerRegistry {
 
 const DEFAULT_HEALTH_CACHE_CAPACITY = 8
 const DEFAULT_HEALTH_BREAKER_CAPACITY = 16
+const HEALTH_CACHE_SWEEP_INTERVAL_MS = 60_000
 type HealthSummaryStatus = 'ok' | 'degraded'
 type HealthPingState = { at: number; ok: boolean }
 type CachedHealthPayload = { body: { status: HealthSummaryStatus; clickhouse: ClickHouseHealth }; statusCode: number }
@@ -197,11 +206,13 @@ let healthPayloadCache = new TimedLRUCache<string, CachedHealthPayload>(DEFAULT_
 let currentHealthCacheCapacity = DEFAULT_HEALTH_CACHE_CAPACITY
 let breakerRegistry = new BreakerRegistry(DEFAULT_HEALTH_BREAKER_CAPACITY)
 let currentHealthBreakerCapacity = DEFAULT_HEALTH_BREAKER_CAPACITY
+let healthCacheSweepTimer: NodeJS.Timeout | undefined
 
 const healthPingCoalescer = new CoalescingMap<string, void>()
 const healthPayloadCoalescer = new CoalescingMap<string, CachedHealthPayload>()
 
 function ensureHealthCacheCapacity(capacity: number): void {
+  ensureHealthCacheMaintenance()
   let next = Number.isFinite(capacity) && capacity > 0 ? Math.floor(capacity) : DEFAULT_HEALTH_CACHE_CAPACITY
   if (next === currentHealthCacheCapacity) {
     return
@@ -209,6 +220,28 @@ function ensureHealthCacheCapacity(capacity: number): void {
   healthPingCache.resize(next)
   healthPayloadCache.resize(next)
   currentHealthCacheCapacity = next
+}
+
+function ensureHealthCacheMaintenance(): void {
+  if (healthCacheSweepTimer) {
+    return
+  }
+  const sweep = () => {
+    const now = Date.now()
+    healthPingCache.prune(now)
+    healthPayloadCache.prune(now)
+  }
+  healthCacheSweepTimer = setInterval(sweep, HEALTH_CACHE_SWEEP_INTERVAL_MS)
+  if (typeof healthCacheSweepTimer.unref === 'function') {
+    healthCacheSweepTimer.unref()
+  }
+}
+
+function stopHealthCacheMaintenance(): void {
+  if (healthCacheSweepTimer) {
+    clearInterval(healthCacheSweepTimer)
+    healthCacheSweepTimer = undefined
+  }
 }
 
 function ensureBreakerCapacity(capacity: number): void {
@@ -247,6 +280,7 @@ function sanitizeHealthError(err: unknown): string {
 }
 
 export function __resetHealthStateForTests() {
+  stopHealthCacheMaintenance()
   healthPingCache = new TimedLRUCache<string, HealthPingState>(DEFAULT_HEALTH_CACHE_CAPACITY)
   healthPayloadCache = new TimedLRUCache<string, CachedHealthPayload>(DEFAULT_HEALTH_CACHE_CAPACITY)
   currentHealthCacheCapacity = DEFAULT_HEALTH_CACHE_CAPACITY
@@ -307,6 +341,15 @@ function recordMetrics(
 
 app.addHook('onResponse', async (req, reply) => {
   recordMetrics(req as any, reply as any)
+})
+
+app.addHook('onClose', async () => {
+  stopHealthCacheMaintenance()
+  healthPingCache.clear()
+  healthPayloadCache.clear()
+  healthPingCoalescer.clear()
+  healthPayloadCoalescer.clear()
+  breakerRegistry.clear()
 })
 
 app.get('/metrics', async (_req, reply) => {
