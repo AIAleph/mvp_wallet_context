@@ -61,8 +61,11 @@ class TimedLRUCache<K, V> {
 
   #trimToCapacity(): void {
     while (this.#store.size > this.capacity) {
-      const oldestKey = this.#store.keys().next().value
-      this.#store.delete(oldestKey)
+      const iterator = this.#store.keys().next()
+      if (iterator.done) {
+        break
+      }
+      this.#store.delete(iterator.value as K)
     }
   }
 }
@@ -174,8 +177,11 @@ class BreakerRegistry {
 
   #trimToCapacity(): void {
     while (this.#store.size > this.capacity) {
-      const oldestKey = this.#store.keys().next().value
-      this.#store.delete(oldestKey)
+      const iterator = this.#store.keys().next()
+      if (iterator.done) {
+        break
+      }
+      this.#store.delete(iterator.value)
     }
   }
 }

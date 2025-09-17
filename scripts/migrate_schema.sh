@@ -167,7 +167,9 @@ ensure_database() {
 
 table_exists() {
   local table="$1"
-  run_clickhouse --database "${CH_DB}" --query "EXISTS TABLE ${CH_DB}.${table}" --format=TabSeparated
+  local query
+  query=$(printf 'EXISTS TABLE %s.%s' "${CH_DB}" "${table}")
+  run_clickhouse --database "${CH_DB}" --query "${query}" --format=TabSeparated
 }
 
 current_version() {
@@ -187,7 +189,11 @@ apply_schema_version_insert() {
     echo "[dry-run] Would record schema_version=${version} (${description})"
     return
   fi
-  run_clickhouse --database "${CH_DB}" --query "INSERT INTO schema_version (version, description) VALUES (${version}, '${description//"/\"}')"
+  run_clickhouse \
+    --database "${CH_DB}" \
+    --param_version="${version}" \
+    --param_description="${description}" \
+    --query "INSERT INTO schema_version (version, description) VALUES ({version:UInt32}, {description:String})"
 }
 
 remove_schema_version_entry() {
@@ -196,7 +202,10 @@ remove_schema_version_entry() {
     echo "[dry-run] Would delete schema_version entry for version ${version}"
     return
   fi
-  run_clickhouse --database "${CH_DB}" --query "ALTER TABLE schema_version DELETE WHERE version = ${version}"
+  run_clickhouse \
+    --database "${CH_DB}" \
+    --param_version="${version}" \
+    --query "ALTER TABLE schema_version DELETE WHERE version = {version:UInt32}"
 }
 
 apply_migration_up() {

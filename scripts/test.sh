@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317
 set -euo pipefail
 
 status=0
@@ -27,7 +28,8 @@ require_tool() {
 go_tests() {
   require_tool go
   require_tool python3
-  local go_cache_root="$(pwd)/.gocache"
+  local go_cache_root
+  go_cache_root="$(pwd)/.gocache"
   GOCACHE="${go_cache_root}" \
     GOMODCACHE="${go_cache_root}/mod" \
     GOPATH="${go_cache_root}/gopath" \
