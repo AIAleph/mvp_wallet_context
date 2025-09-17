@@ -1,4 +1,4 @@
--- Minimal dev tables for normalized ingestion previews
+-- v1: Development baseline schema (dev_* tables)
 CREATE TABLE IF NOT EXISTS dev_logs (
   event_uid String,
   tx_hash String,
@@ -63,7 +63,6 @@ CREATE TABLE IF NOT EXISTS dev_approvals (
   INDEX idx_dev_appr_block block_number TYPE minmax GRANULARITY 1
 ) ENGINE = MergeTree ORDER BY (event_uid);
 
--- Schema version tracking (dev)
 CREATE TABLE IF NOT EXISTS schema_version (
   version UInt32,
   applied_at DateTime64(3, 'UTC') DEFAULT now64(3),

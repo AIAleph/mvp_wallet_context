@@ -5,6 +5,11 @@ Overview
 - Fastify server scaffold with strict Zod validation.
 - Tests via Vitest with v8 coverage and 100% thresholds.
 
+Monitoring
+- `GET /metrics`: Prometheus exposition format with basic counters and gauges.
+  - Counters: `http_requests_total{method,route,status}`
+  - Gauges: `process_resident_memory_bytes`, `process_uptime_seconds`
+
 Build & Test
 - Install: `npm ci`
 - Build: `npm run build` (uses `tsconfig.build.json` and excludes tests)
@@ -24,3 +29,48 @@ Server Startup Semantics
 
 Notes
 - Coverage thresholds are enforced at 100% in `vitest.config.ts`. If you add new endpoints, ensure tests cover success and error paths or use targeted `/* c8 ignore */` for truly untestable branches.
+
+Health Endpoints
+- `GET /health`: returns `{ status: 'ok' }`. If ClickHouse is configured via env, the server performs a lightweight `SELECT 1` probe using the HTTP interface, but errors are ignored to keep this endpoint always green.
+  Example:
+  ```json
+  {
+    "status": "ok"
+  }
+  ```
+- `GET /healthz`: detailed health; only enabled when `HEALTH_DEBUG=1|true|yes|on`. Responds with `{ status: 'ok', clickhouse: { configured, ok, status?, error? } }`.
+  Example (healthy):
+  ```json
+  {
+    "status": "ok",
+    "clickhouse": {
+      "configured": true,
+      "ok": true,
+      "status": "reachable"
+    }
+  }
+  ```
+  Example (degraded):
+  ```json
+  {
+    "status": "error",
+    "clickhouse": {
+      "configured": true,
+      "ok": false,
+      "error": "connection refused"
+    }
+  }
+  ```
+ - Timeout: ClickHouse pings use `HEALTH_PING_TIMEOUT_MS` (default `3000`) to avoid hanging when the host is unreachable.
+ - Rate limit: set `HEALTH_RATE_LIMIT_RPS` to limit requests per second (default `0` disables limiting).
+ - Caching: health checks are cached for `HEALTH_CACHE_TTL_MS` (default `5000`), avoiding repeated work under load.
+
+ClickHouse Config
+- Preferred DSN: set `CLICKHOUSE_DSN` (e.g., `http://user:pass@localhost:8123/wallets`).
+- Or provide parts: `CLICKHOUSE_URL`, `CLICKHOUSE_DB`, optional `CLICKHOUSE_USER`, `CLICKHOUSE_PASS`.
+- The server constructs the DSN for health checks using these values; credentials are not logged and are sent via `Authorization: Basic ...` header (not embedded in the URL at request time).
+ 
+Health-related env
+- `HEALTH_PING_TIMEOUT_MS` (default `3000`)
+- `HEALTH_CACHE_TTL_MS` (default `5000`)
+- `HEALTH_RATE_LIMIT_RPS` (default `0`, disabled)

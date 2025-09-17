@@ -9,8 +9,9 @@ ifeq ($(strip $(CH_DB)),)
   CH_DB := wallets
 endif
 
-.PHONY: schema-dev go-test api-test db-dev ingest-dev go-cover api-cover tools-test \
-	dev-up dev-down dev-logs schema-dev-dc dev-nuke ch-client
+# Public targets requested
+.PHONY: schema api ingest test lint go-test api-test ingest-dev go-cover api-cover tools-test \
+    dev-up dev-down dev-logs dev-nuke ch-client ensure-clickhouse migrate-schema
 
 # Local dev stack: ClickHouse and Redis (minimal, no Keeper needed)
 dev-up:
@@ -27,21 +28,17 @@ dev-nuke:
 	$(DOCKER_COMPOSE) down -v
 	@echo "Compose stack fully removed (containers, network, volumes)."
 
-db-dev:
-	@echo "Ensuring database exists: $(CH_DB)"
-	@which clickhouse-client >/dev/null 2>&1 || { echo "clickhouse-client not found"; exit 1; }
-	@clickhouse-client -q "CREATE DATABASE IF NOT EXISTS $(CH_DB)"
 
-schema-dev: db-dev
-	@echo "Applying dev schema (sql/schema_dev.sql) to DB=$(CH_DB)"
-	@which clickhouse-client >/dev/null 2>&1 || { echo "clickhouse-client not found"; exit 1; }
-	@clickhouse-client --database $(CH_DB) --queries-file sql/schema_dev.sql
 
-# Apply dev schema using ClickHouse client inside the container
-schema-dev-dc:
-	@echo "Applying dev schema via docker compose to DB=$(CH_DB)"
-	@$(DOCKER_COMPOSE) ps --status=running >/dev/null 2>&1 || { echo "docker compose not available or stack not running"; exit 1; }
-	@$(DOCKER_COMPOSE) exec -T clickhouse bash -lc "clickhouse-client --database '$(CH_DB)' -n" < sql/schema_dev.sql
+# Apply schema via script (prefers sql/schema.sql; falls back to dev)
+schema:
+	./scripts/schema.sh
+
+ensure-clickhouse:
+	./scripts/ensure_clickhouse.sh
+
+migrate-schema: ensure-clickhouse
+	./scripts/migrate_schema.sh $(if $(TO),TO=$(TO),) $(if $(DB),DB=$(DB),) $(if $(DRY_RUN),DRY_RUN=$(DRY_RUN),)
 
 # Open an interactive ClickHouse client inside the container
 ch-client:
@@ -56,6 +53,10 @@ go-cover:
 
 api-test:
 	cd api && npm run test:threads
+
+# Start API in dev mode (Node 20+)
+api:
+	./scripts/api.sh dev
 
 # API coverage with thresholds enforced in vitest config (100%).
 api-cover:
@@ -74,7 +75,14 @@ MODE ?= backfill
 BATCH ?= 5000
 
 ingest-dev:
-	@test -n "$(ADDRESS)" || { echo "ADDRESS is required (0x...)"; exit 1; }
-	@echo "Running ingester for $(ADDRESS) mode=$(MODE) range=$(FROM)..$(TO) batch=$(BATCH)"
-	GOCACHE=$(PWD)/.gocache GOMODCACHE=$(PWD)/.gocache/mod GOPATH=$(PWD)/.gocache/gopath \
-		go run ./cmd/ingester --address $(ADDRESS) --mode $(MODE) --from-block $(FROM) --to-block $(TO) --batch $(BATCH)
+	./scripts/ingest.sh ADDRESS=$(ADDRESS) MODE=$(MODE) FROM=$(FROM) TO=$(TO) BATCH=$(BATCH)
+
+# Public alias for ingestion
+ingest: ingest-dev
+
+# Aggregate targets
+test:
+	./scripts/test.sh
+
+lint:
+	./scripts/lint.sh
