@@ -126,8 +126,26 @@ def test_migrate_schema_records_version(tmp_path: Path):
         "clickhouse-client",
         f"""#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$1" == "--database" ]]; then shift 2; fi
-if [[ "$1" == "-q" ]]; then echo "$2" >> "{log}"; exit 0; fi
+while (($#)); do
+  case "$1" in
+    --database)
+      shift 2
+      ;;
+    --param_*)
+      shift
+      ;;
+    -q|--query|-n)
+      shift
+      if (($#)); then
+        echo "$1" >> "{log}"
+      fi
+      exit 0
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
 exit 0
 """,
     )
