@@ -313,12 +313,89 @@ func TestHasInsecurePassword(t *testing.T) {
 		{"http://user@host:8123/db", false},
 		{"http://user:secret@host:8123/db", true},
 		{"invalid://:secret@host", true},
+		{"http://%zz:secret@host", true},
+		{"http://%zz@host", false},
+		{"foo//:secret@host", false},
 	}
 	for _, tc := range cases {
 		if got := hasInsecurePassword(tc.dsn); got != tc.expect {
 			t.Fatalf("hasInsecurePassword(%q) = %v, want %v", tc.dsn, got, tc.expect)
 		}
 	}
+}
+
+type stubProvider struct{}
+
+func (stubProvider) BlockNumber(ctx context.Context) (uint64, error)                 { return 0, nil }
+func (stubProvider) BlockTimestamp(ctx context.Context, block uint64) (int64, error) { return 0, nil }
+func (stubProvider) GetLogs(ctx context.Context, address string, from, to uint64, topics [][]string) ([]eth.Log, error) {
+	return nil, nil
+}
+func (stubProvider) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
+	return nil, nil
+}
+
+type stubIngest struct{ backfill, delta bool }
+
+func (s *stubIngest) Backfill(context.Context) error { s.backfill = true; return nil }
+func (s *stubIngest) Delta(context.Context) error    { s.delta = true; return nil }
+
+func TestMain_WithProviderPath(t *testing.T) {
+	withFreshFlags(t, func() {
+		addr := "0x" + strings.Repeat("a", 40)
+		oldArgs := os.Args
+		os.Args = []string{"ingester", "--address", addr, "--provider", "http://rpc", "--rate-limit", "10"}
+		defer func() { os.Args = oldArgs }()
+
+		oldNewProvider := newProvider
+		oldNewIngestWithProvider := newIngestWithProvider
+		oldNewIngest := newIngest
+		defer func() {
+			newProvider = oldNewProvider
+			newIngestWithProvider = oldNewIngestWithProvider
+			newIngest = oldNewIngest
+		}()
+
+		var providerCalled bool
+		newProvider = func(endpoint string, rate int, retries int, backoff time.Duration) (eth.Provider, error) {
+			providerCalled = true
+			if endpoint != "http://rpc" {
+				t.Fatalf("endpoint = %q", endpoint)
+			}
+			if rate != 10 {
+				t.Fatalf("rate = %d", rate)
+			}
+			return stubProvider{}, nil
+		}
+		stub := &stubIngest{}
+		newIngestWithProvider = func(address string, opts ingest.Options, p eth.Provider) interface {
+			Backfill(context.Context) error
+			Delta(context.Context) error
+		} {
+			if address != addr {
+				t.Fatalf("address mismatch: %s", address)
+			}
+			if opts.ProviderURL != "http://rpc" {
+				t.Fatalf("opts.ProviderURL=%q", opts.ProviderURL)
+			}
+			return stub
+		}
+		newIngest = func(address string, opts ingest.Options) interface {
+			Backfill(context.Context) error
+			Delta(context.Context) error
+		} {
+			t.Fatal("unexpected newIngest fallback")
+			return nil
+		}
+
+		out, errOut := captureStd(t, func() { main() })
+		if strings.TrimSpace(out) != "ok" || errOut != "" {
+			t.Fatalf("unexpected output: out=%q err=%q", out, errOut)
+		}
+		if !providerCalled || !stub.backfill {
+			t.Fatalf("providerCalled=%v backfill=%v", providerCalled, stub.backfill)
+		}
+	})
 }
 
 func TestMain_FromGreaterThanTo(t *testing.T) {
@@ -402,6 +479,33 @@ func TestMain_NonPositiveBatch(t *testing.T) {
 	})
 }
 
+func TestMain_NegativeRateLimit(t *testing.T) {
+	withFreshFlags(t, func() {
+		addr := "0x" + strings.Repeat("a", 40)
+		oldArgs := os.Args
+		os.Args = []string{"ingester", "--address", addr, "--rate-limit", "-5"}
+		defer func() { os.Args = oldArgs }()
+		oldExit := exit
+		defer func() { exit = oldExit }()
+		exit = func(code int) { panic(exitPanic{code}) }
+		_, errOut := captureStd(t, func() {
+			defer func() {
+				if r := recover(); r != nil {
+					if ep, ok := r.(exitPanic); ok && ep.code == 2 {
+						return
+					}
+					panic(r)
+				}
+				t.Fatalf("expected exit panic")
+			}()
+			main()
+		})
+		if !strings.Contains(errOut, "--rate-limit must be >= 0") {
+			t.Fatalf("stderr = %q", errOut)
+		}
+	})
+}
+
 func TestMain_DryRunOutputsJSON(t *testing.T) {
 	withFreshFlags(t, func() {
 		addr := "0x" + strings.Repeat("a", 40)
@@ -476,7 +580,9 @@ func TestMain_IngestionError(t *testing.T) {
 		newIngest = func(address string, opts ingest.Options) interface {
 			Backfill(context.Context) error
 			Delta(context.Context) error
-		} { return stubRunner{backfillErr: errors.New("boom")} }
+		} {
+			return stubRunner{backfillErr: errors.New("boom")}
+		}
 
 		// Intercept exit(1)
 		oldExit := exit
@@ -551,7 +657,10 @@ func TestMain_ProviderErrorAndWiring(t *testing.T) {
 		newIngestWithProvider = func(address string, opts ingest.Options, _ eth.Provider) interface {
 			Backfill(context.Context) error
 			Delta(context.Context) error
-		} { called = true; return ingest.New(address, opts) }
+		} {
+			called = true
+			return ingest.New(address, opts)
+		}
 		out, _ := captureStd(t, func() { main() })
 		if strings.TrimSpace(out) != "ok" || !called {
 			t.Fatalf("provider wiring failed, out=%q called=%v", out, called)

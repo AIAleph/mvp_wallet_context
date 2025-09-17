@@ -18,8 +18,8 @@ var httpNewRequest = http.NewRequestWithContext
 
 // Client is a thin ClickHouse HTTP client wrapper. It supports JSONEachRow inserts.
 type Client struct {
-	endpoint string
-	hc       *http.Client
+	endpoint   string
+	hc         *http.Client
 	reqTimeout time.Duration
 }
 
@@ -47,6 +47,14 @@ func (c *Client) requestContext(ctx context.Context) (context.Context, context.C
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, c.reqTimeout)
+}
+
+// SetTransport allows tests to inject a custom RoundTripper.
+func (c *Client) SetTransport(rt http.RoundTripper) {
+	if c == nil || rt == nil {
+		return
+	}
+	c.hc.Transport = rt
 }
 
 func (c *Client) Ping(ctx context.Context) error {

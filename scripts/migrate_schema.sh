@@ -98,6 +98,7 @@ declare -A MIGRATION_DESC
 while IFS= read -r file; do
   base="$(basename "$file")"
   version="${base%%_*}"
+  version=$((10#${version}))
   desc="${base#*_}"
   desc="${desc%.up.sql}"
   MIGRATION_UP["${version}"]="${file}"
@@ -107,6 +108,7 @@ done < <(find "${MIGRATIONS_DIR}" -type f -name '*.up.sql' | sort)
 while IFS= read -r file; do
   base="$(basename "$file")"
   version="${base%%_*}"
+  version=$((10#${version}))
   MIGRATION_DOWN["${version}"]="${file}"
 done < <(find "${MIGRATIONS_DIR}" -type f -name '*.down.sql' | sort)
 
