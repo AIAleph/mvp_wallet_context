@@ -302,8 +302,19 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 	}
 	// Normalize and write according to schema mode
 	mode := i.SchemaMode()
+	txRows := normalize.TransactionsToRows(txs, false)
+	if i.address != "" && len(txRows) > 0 {
+		// Guard against providers that return broader ranges than requested.
+		filtered := make([]normalize.TransactionRow, 0, len(txRows))
+		addr := i.address
+		for _, row := range txRows {
+			if row.From == addr || row.To == addr {
+				filtered = append(filtered, row)
+			}
+		}
+		txRows = filtered
+	}
 	if mode == "canonical" {
-		txRows := normalize.TransactionsToRows(txs, false)
 		// Logs
 		lrows := normalize.LogsToRows(logs)
 		if len(lrows) > 0 {
@@ -413,7 +424,6 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 			return fmt.Errorf("inserting traces: %w", err)
 		}
 	} else {
-		txRows := normalize.TransactionsToRows(txs, false)
 		// dev schema (existing behavior)
 		lrows := normalize.LogsToRows(logs)
 		if err := i.ch.InsertJSONEachRow(ctx, "dev_logs", normalize.AsAny(lrows)); err != nil {

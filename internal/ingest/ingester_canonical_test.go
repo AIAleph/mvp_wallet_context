@@ -205,3 +205,87 @@ func TestProcessRange_CanonicalTransactionTraceID(t *testing.T) {
 		t.Fatalf("expected trace_id trace-1, got %s", row.TraceID)
 	}
 }
+
+type provCanonFilterTx struct{}
+
+func (provCanonFilterTx) BlockNumber(ctx context.Context) (uint64, error) { return 1, nil }
+func (provCanonFilterTx) BlockTimestamp(ctx context.Context, block uint64) (int64, error) {
+	return 5_000, nil
+}
+func (provCanonFilterTx) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
+	return nil, nil
+}
+func (provCanonFilterTx) GetLogs(ctx context.Context, address string, from, to uint64, topics [][]string) ([]eth.Log, error) {
+	return nil, nil
+}
+func (provCanonFilterTx) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return []eth.Transaction{
+		{
+			Hash:     "0xaaa",
+			From:     address,
+			To:       "0x1111111111111111111111111111111111111111",
+			ValueWei: "0x1",
+			Status:   1,
+			GasUsed:  21_000,
+			InputHex: "0x095ea7b3",
+			BlockNum: from,
+			TsMillis: 5_000,
+		},
+		{
+			Hash:     "0xbbb",
+			From:     "0x9999999999999999999999999999999999999999",
+			To:       "0x8888888888888888888888888888888888888888",
+			ValueWei: "0x2",
+			Status:   1,
+			GasUsed:  30_000,
+			InputHex: "0xdeadbeef",
+			BlockNum: from,
+			TsMillis: 5_000,
+		},
+	}, nil
+}
+
+func TestProcessRange_CanonicalTransactionsFilterByAddress(t *testing.T) {
+	const addr = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	ing := NewWithProvider(addr, Options{Schema: "canonical", ClickHouseDSN: "http://localhost:8123/db"}, provCanonFilterTx{})
+	var rows []map[string]any
+	ing.ch.SetTransport(rtFunc(func(r *http.Request) (*http.Response, error) {
+		q := r.URL.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO transactions") {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			payload := strings.TrimSpace(string(body))
+			for _, line := range strings.Split(payload, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				var m map[string]any
+				if err := json.Unmarshal([]byte(line), &m); err != nil {
+					t.Fatalf("decode insert: %v", err)
+				}
+				rows = append(rows, m)
+			}
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing.processRange(context.Background(), 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 transaction row, got %d", len(rows))
+	}
+	row := rows[0]
+	fromVal, ok := row["from_addr"].(string)
+	if !ok {
+		t.Fatalf("from_addr missing or not a string: %+v", row)
+	}
+	if fromVal != strings.ToLower(addr) {
+		t.Fatalf("unexpected from_addr %s", fromVal)
+	}
+	if method, ok := row["input_method"].(string); !ok || method != "approve" {
+		t.Fatalf("expected input_method approve, got %v", row["input_method"])
+	}
+}
