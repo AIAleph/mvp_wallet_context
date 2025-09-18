@@ -101,6 +101,12 @@ testdata/             Recorded-fixture guidance plus (eventual) provider capture
 - Provider wiring (`internal/eth/factory.go`) applies rate limiting and retry/backoff defaults; extend with host-specific adapters as needed.
 - ClickHouse schema uses ReplacingMergeTree with `ingested_at` or `updated_at` version columns; surrogate keys (`event_uid`, `trace_uid`) should lead ORDER BY clauses per ADR-0002 (pending schema update).
 
+## Observability
+
+- The ingester now emits structured `receipt_lookup` JSON logs detailing provider host, block span, examined transactions, and per-range `eth_getTransactionReceipt` call counts to help drive RPC load dashboards and alerts. See `docs/observability.md` for Grafana/Loki query + alert thresholds.
+- Set `INGEST_LOG_LEVEL` (debug|info|warn|error) to tune verbosity; defaults to `info` for production-friendly noise levels.
+- Dashboards can treat `receipt_calls` as a log-derived metric to alert when receipt fan-out approaches provider rate limits.
+
 ## Additional Documentation
 
 - `docs/PRD_MVP_Wallet_Intelligence.md` – MVP scope, user journeys, and data requirements

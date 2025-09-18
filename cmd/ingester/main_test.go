@@ -334,6 +334,9 @@ func (stubProvider) GetLogs(ctx context.Context, address string, from, to uint64
 func (stubProvider) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
 	return nil, nil
 }
+func (stubProvider) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return nil, nil
+}
 
 type stubIngest struct{ backfill, delta bool }
 

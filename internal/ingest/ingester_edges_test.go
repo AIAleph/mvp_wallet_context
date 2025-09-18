@@ -18,6 +18,9 @@ func (provErrUnsup) GetLogs(ctx context.Context, address string, from, to uint64
 func (provErrUnsup) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
 	return nil, eth.ErrUnsupported
 }
+func (provErrUnsup) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return nil, eth.ErrUnsupported
+}
 
 type provErr struct{}
 
@@ -27,6 +30,9 @@ func (provErr) GetLogs(ctx context.Context, address string, from, to uint64, top
 	return nil, nil
 }
 func (provErr) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
+	return nil, nil
+}
+func (provErr) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
 	return nil, nil
 }
 

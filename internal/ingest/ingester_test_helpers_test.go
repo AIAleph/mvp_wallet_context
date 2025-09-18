@@ -67,10 +67,14 @@ func (p stubCursorProvider) GetLogs(ctx context.Context, address string, from, t
 func (p stubCursorProvider) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
 	return nil, nil
 }
+func (p stubCursorProvider) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return nil, nil
+}
 
 type captureProv struct {
-	head  uint64
-	calls []struct{ from, to uint64 }
+	head    uint64
+	calls   []struct{ from, to uint64 }
+	txCalls []struct{ from, to uint64 }
 }
 
 func (p *captureProv) BlockNumber(ctx context.Context) (uint64, error) { return p.head, nil }
@@ -82,6 +86,10 @@ func (p *captureProv) GetLogs(ctx context.Context, address string, from, to uint
 	return nil, nil
 }
 func (p *captureProv) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
+	return nil, nil
+}
+func (p *captureProv) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	p.txCalls = append(p.txCalls, struct{ from, to uint64 }{from: from, to: to})
 	return nil, nil
 }
 
@@ -106,6 +114,12 @@ func (p *panicRangeProvider) TraceBlock(ctx context.Context, from, to uint64, ad
 	}
 	return nil, nil
 }
+func (p *panicRangeProvider) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	if p.t != nil {
+		p.t.Fatalf("unexpected Transactions call: %d-%d", from, to)
+	}
+	return nil, nil
+}
 
 type maxHeadProvider struct{}
 
@@ -117,6 +131,9 @@ func (maxHeadProvider) GetLogs(ctx context.Context, address string, from, to uin
 	return nil, nil
 }
 func (maxHeadProvider) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
+	return nil, nil
+}
+func (maxHeadProvider) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
 	return nil, nil
 }
 
@@ -131,6 +148,9 @@ func (devSchemaProvider) GetLogs(ctx context.Context, address string, from, to u
 }
 func (devSchemaProvider) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
 	return []eth.Trace{{TxHash: "0x1", TraceID: "0", From: address, To: "0x2", BlockNum: from, TsMillis: 0}}, nil
+}
+func (devSchemaProvider) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return []eth.Transaction{{Hash: "0x1", From: address, To: "0x2", BlockNum: from}}, nil
 }
 
 type queryFailingTransport struct {

@@ -26,6 +26,23 @@ CREATE TABLE IF NOT EXISTS dev_traces (
   INDEX idx_dev_traces_block block_number TYPE minmax GRANULARITY 1
 ) ENGINE = MergeTree ORDER BY (trace_uid);
 
+CREATE TABLE IF NOT EXISTS dev_transactions (
+  tx_hash String,
+  block_number UInt64,
+  ts_millis Int64,
+  from_addr String,
+  to_addr String,
+  value_raw String,
+  gas_used UInt64,
+  status UInt8,
+  input_method String,
+  is_internal UInt8,
+  trace_id String,
+  INDEX idx_dev_tx_from from_addr TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_dev_tx_to to_addr TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_dev_tx_block block_number TYPE minmax GRANULARITY 1
+) ENGINE = MergeTree ORDER BY (tx_hash, is_internal, trace_id);
+
 CREATE TABLE IF NOT EXISTS dev_token_transfers (
   event_uid String,
   tx_hash String,

@@ -40,6 +40,29 @@ CREATE TABLE IF NOT EXISTS traces (
 ORDER BY (tx_hash, trace_id)
 SETTINGS index_granularity = 8192;
 
+-- Transactions (external + internal traces normalization)
+CREATE TABLE IF NOT EXISTS transactions (
+  tx_hash String,
+  block_number UInt64,
+  ts DateTime64(3, 'UTC'),
+  from_addr String,
+  to_addr String,
+  value_raw String,
+  gas_used UInt64,
+  status UInt8,
+  input_method Nullable(FixedString(10)),
+  is_internal UInt8,
+  trace_id Nullable(String),
+  ingested_at DateTime64(3, 'UTC') DEFAULT now64(3),
+  INDEX idx_tx_from from_addr TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_tx_to to_addr TYPE bloom_filter GRANULARITY 2,
+  INDEX idx_tx_block block_number TYPE minmax GRANULARITY 1,
+  CONSTRAINT tx_from_chk CHECK match(from_addr, '^0x[0-9a-fA-F]{40}$'),
+  CONSTRAINT tx_to_chk CHECK to_addr = '' OR match(to_addr, '^0x[0-9a-fA-F]{40}$')
+) ENGINE = ReplacingMergeTree(ingested_at)
+ORDER BY (tx_hash, is_internal, ifNull(trace_id, ''))
+SETTINGS index_granularity = 4096;
+
 -- Token transfers (ERC-20/721/1155)
 CREATE TABLE IF NOT EXISTS token_transfers (
   event_uid String,

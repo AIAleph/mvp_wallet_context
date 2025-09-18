@@ -8,10 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/AIAleph/mvp_wallet_context/internal/logging"
 )
 
 var ErrUnsupported = errors.New("method not supported by provider")
@@ -24,6 +28,7 @@ type httpDoer interface {
 // It intentionally leaves rate limiting/retries to wrappers (RLProvider, etc.).
 type httpProvider struct {
 	endpoint    string
+	providerLbl string
 	hc          httpDoer
 	maxRetries  int
 	backoffBase time.Duration
@@ -40,6 +45,7 @@ func NewHTTPProvider(endpoint string, client *http.Client) (Provider, error) {
 	}
 	return &httpProvider{
 		endpoint:    endpoint,
+		providerLbl: deriveProviderLabel(endpoint),
 		hc:          client,
 		maxRetries:  2,
 		backoffBase: 100 * time.Millisecond,
@@ -152,6 +158,23 @@ func (c *timestampCache) removeElement(el *list.Element) {
 	entry := el.Value.(*timestampCacheEntry)
 	delete(c.entries, entry.key)
 	c.ordered.Remove(el)
+}
+
+func deriveProviderLabel(endpoint string) string {
+	if endpoint == "" {
+		return ""
+	}
+	if u, err := url.Parse(endpoint); err == nil {
+		u.User = nil
+		if u.Host != "" {
+			return u.Host
+		}
+		if u.Scheme == "" {
+			return endpoint
+		}
+		return u.String()
+	}
+	return endpoint
 }
 
 func (p *httpProvider) call(ctx context.Context, method string, params interface{}, out interface{}) error {
@@ -392,6 +415,117 @@ func (p *httpProvider) TraceBlock(ctx context.Context, from, to uint64, address 
 		}
 	}
 	return all, nil
+}
+
+// Transactions currently returns ErrUnsupported; external adapters can wrap
+// provider-specific transaction endpoints (e.g., Alchemy Transfers API).
+func (p *httpProvider) Transactions(ctx context.Context, address string, from, to uint64) (result []Transaction, err error) {
+	if from > to {
+		return nil, nil
+	}
+	lowerAddr := strings.ToLower(address)
+	start := time.Now()
+	receiptCalls := 0
+	blockCalls := 0
+	txExamined := 0
+	txMatched := 0
+	span := to - from
+	if span != math.MaxUint64 {
+		span++
+	}
+	logger := logging.Logger()
+	defer func() {
+		if logger == nil {
+			return
+		}
+		fields := []any{
+			"component", "eth.http_provider.transactions",
+			"provider", p.providerLbl,
+			"address", lowerAddr,
+			"from_block", from,
+			"to_block", to,
+			"block_span", span,
+			"receipt_calls", receiptCalls,
+			"block_calls", blockCalls,
+			"tx_examined", txExamined,
+			"tx_matched", txMatched,
+			"tx_returned", len(result),
+			"elapsed_ms", time.Since(start).Milliseconds(),
+		}
+		if err != nil {
+			logger.Warn("receipt_lookup_failed", append(fields, "error", err.Error())...)
+			return
+		}
+		logger.Info("receipt_lookup", fields...)
+	}()
+	for blk := from; blk <= to; blk++ {
+		var block struct {
+			Timestamp    string `json:"timestamp"`
+			Transactions []struct {
+				Hash  string  `json:"hash"`
+				From  string  `json:"from"`
+				To    *string `json:"to"`
+				Input string  `json:"input"`
+				Value string  `json:"value"`
+			} `json:"transactions"`
+		}
+		params := []interface{}{toHex(blk), true}
+		blockCalls++
+		if callErr := p.call(ctx, "eth_getBlockByNumber", params, &block); callErr != nil {
+			err = callErr
+			return nil, err
+		}
+		tsSec, err := hexToUint64(block.Timestamp)
+		if err != nil {
+			return nil, err
+		}
+		tsMillis := int64(tsSec) * 1000
+		for _, tx := range block.Transactions {
+			txExamined++
+			fromLower := strings.ToLower(tx.From)
+			toLower := ""
+			if tx.To != nil {
+				toLower = strings.ToLower(*tx.To)
+			}
+			if fromLower != lowerAddr && toLower != lowerAddr {
+				continue
+			}
+			txMatched++
+			var receipt struct {
+				Status  string `json:"status"`
+				GasUsed string `json:"gasUsed"`
+			}
+			receiptCalls++
+			if callErr := p.call(ctx, "eth_getTransactionReceipt", []interface{}{tx.Hash}, &receipt); callErr != nil {
+				err = callErr
+				return nil, err
+			}
+			gasUsed, err := hexToUint64(receipt.GasUsed)
+			if err != nil {
+				return nil, err
+			}
+			statusVal := uint8(1)
+			if receipt.Status != "" {
+				s, err := hexToUint64(receipt.Status)
+				if err != nil {
+					return nil, err
+				}
+				statusVal = uint8(s)
+			}
+			result = append(result, Transaction{
+				Hash:     tx.Hash,
+				From:     fromLower,
+				To:       toLower,
+				ValueWei: tx.Value,
+				InputHex: tx.Input,
+				GasUsed:  gasUsed,
+				Status:   statusVal,
+				BlockNum: blk,
+				TsMillis: int64(tsMillis),
+			})
+		}
+	}
+	return result, nil
 }
 
 // blockTimestampMillis fetches the block and returns timestamp in milliseconds.

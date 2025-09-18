@@ -18,6 +18,7 @@ ClickHouse (preferred separate fields; DSN supported for compatibility)
 Optional integrations
 - REDIS_URL: Redis connection URL for caching/job state (optional)
 - EMBEDDING_MODEL: Embedding model identifier for semantic search (optional)
+- INGEST_LOG_LEVEL: Structured log level for the Go ingester (debug|info|warn|error; default info)
 
 Go ingester flags map to env with sensible defaults. Example:
   ETH_PROVIDER_URL=https://... \
@@ -32,4 +33,3 @@ Go ingester flags map to env with sensible defaults. Example:
   ingester --address 0xabc... --mode backfill
 
 Security note: tooling and CLI avoid logging secrets; DSNs are redacted in dry-run output.
-

@@ -33,6 +33,9 @@ func (provCanonRich) GetLogs(ctx context.Context, address string, from, to uint6
 func (provCanonRich) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
 	return []eth.Trace{{TxHash: "0x3", TraceID: "root", From: address, To: address, ValueWei: "0x1", BlockNum: from}}, nil
 }
+func (provCanonRich) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return []eth.Transaction{{Hash: "0x4", From: address, To: address, ValueWei: "0x1", BlockNum: from, Status: 1}}, nil
+}
 
 // Helper RoundTripper reused from other tests (ioNopCloser defined there as well)
 type rtFunc func(*http.Request) (*http.Response, error)
@@ -92,5 +95,19 @@ func TestCanonical_InsertTracesError(t *testing.T) {
 	}))
 	if err := ing.processRange(context.Background(), 1, 1); err == nil {
 		t.Fatal("expected traces insert error")
+	}
+}
+
+func TestCanonical_InsertTransactionsError(t *testing.T) {
+	ing := NewWithProvider("0xabc", Options{Schema: "canonical", ClickHouseDSN: "http://localhost:8123/db"}, provCanonRich{})
+	ing.ch.SetTransport(rtFunc(func(r *http.Request) (*http.Response, error) {
+		q := r.URL.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO transactions") {
+			return &http.Response{StatusCode: 500, Body: ioNopCloser("boom")}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing.processRange(context.Background(), 1, 1); err == nil {
+		t.Fatal("expected transactions insert error")
 	}
 }
