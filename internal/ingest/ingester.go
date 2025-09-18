@@ -274,6 +274,10 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 	if err != nil && err != eth.ErrUnsupported {
 		return fmt.Errorf("tracing blocks: %w", err)
 	}
+	txs, err := i.prov.Transactions(ctx, i.address, from, to)
+	if err != nil && err != eth.ErrUnsupported {
+		return fmt.Errorf("getting transactions: %w", err)
+	}
 	// Fill timestamps if missing using in-process cache + provider
 	for idx := range logs {
 		if logs[idx].TsMillis == 0 {
@@ -289,9 +293,17 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 			}
 		}
 	}
+	for idx := range txs {
+		if txs[idx].TsMillis == 0 {
+			if ts, ok := i.getBlockTs(ctx, txs[idx].BlockNum); ok {
+				txs[idx].TsMillis = ts
+			}
+		}
+	}
 	// Normalize and write according to schema mode
 	mode := i.SchemaMode()
 	if mode == "canonical" {
+		txRows := normalize.TransactionsToRows(txs, false)
 		// Logs
 		lrows := normalize.LogsToRows(logs)
 		if len(lrows) > 0 {
@@ -354,6 +366,34 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 		if err := i.ch.InsertJSONEachRow(ctx, "approvals", rowsApprovals); err != nil {
 			return fmt.Errorf("inserting approvals: %w", err)
 		}
+		if len(txRows) > 0 {
+			rowsTx := make([]any, 0, len(txRows))
+			for _, r := range txRows {
+				row := map[string]any{
+					"tx_hash":      r.TxHash,
+					"block_number": r.BlockNum,
+					"ts":           fmtDT64(r.TsMillis),
+					"from_addr":    r.From,
+					"to_addr":      r.To,
+					"value_raw":    r.ValueRaw,
+					"gas_used":     r.GasUsed,
+					"status":       r.Status,
+					"is_internal":  r.IsInternal,
+					"trace_id":     nil,
+					"input_method": nil,
+				}
+				if r.TraceID != "" {
+					row["trace_id"] = r.TraceID
+				}
+				if r.InputMethod != "" {
+					row["input_method"] = r.InputMethod
+				}
+				rowsTx = append(rowsTx, row)
+			}
+			if err := i.ch.InsertJSONEachRow(ctx, "transactions", rowsTx); err != nil {
+				return fmt.Errorf("inserting transactions: %w", err)
+			}
+		}
 
 		trows := normalize.TracesToRows(traces)
 		rowsTraces := make([]any, 0, len(trows))
@@ -373,6 +413,7 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 			return fmt.Errorf("inserting traces: %w", err)
 		}
 	} else {
+		txRows := normalize.TransactionsToRows(txs, false)
 		// dev schema (existing behavior)
 		lrows := normalize.LogsToRows(logs)
 		if err := i.ch.InsertJSONEachRow(ctx, "dev_logs", normalize.AsAny(lrows)); err != nil {
@@ -384,6 +425,11 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 		}
 		if err := i.ch.InsertJSONEachRow(ctx, "dev_approvals", normalize.AsAny(tApprovals)); err != nil {
 			return fmt.Errorf("inserting dev_approvals: %w", err)
+		}
+		if len(txRows) > 0 {
+			if err := i.ch.InsertJSONEachRow(ctx, "dev_transactions", normalize.AsAny(txRows)); err != nil {
+				return fmt.Errorf("inserting dev_transactions: %w", err)
+			}
 		}
 		if traces != nil {
 			trows := normalize.TracesToRows(traces)

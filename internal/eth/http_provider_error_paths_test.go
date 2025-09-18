@@ -342,3 +342,35 @@ func TestHTTPProvider_BlockTimestamp_CallError(t *testing.T) {
 		t.Fatal("expected call error")
 	}
 }
+
+func TestHTTPProvider_Transactions_ReceiptError(t *testing.T) {
+	addr := "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			return mkResp(map[string]any{
+				"timestamp": "0x64",
+				"transactions": []map[string]any{{
+					"hash":  "0xhash1",
+					"from":  addr,
+					"to":    addr,
+					"value": "0x1",
+					"input": "0x",
+				}},
+			}), nil
+		case "eth_getTransactionReceipt":
+			return &http.Response{StatusCode: 500, Body: io.NopCloser(bytes.NewReader([]byte("boom")))}, nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, _ := NewHTTPProvider("http://unit-test", client)
+	if hp, ok := p.(*httpProvider); ok {
+		hp.backoffBase = 1
+		hp.maxRetries = 0
+	}
+	if _, err := p.Transactions(context.Background(), addr, 16, 16); err == nil {
+		t.Fatal("expected receipt error")
+	}
+}

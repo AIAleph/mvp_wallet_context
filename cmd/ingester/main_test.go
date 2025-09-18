@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"log/slog"
 	"os"
 	"regexp"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/AIAleph/mvp_wallet_context/internal/eth"
 	"github.com/AIAleph/mvp_wallet_context/internal/ingest"
+	"github.com/AIAleph/mvp_wallet_context/internal/logging"
 )
 
 // exitPanic is used to intercept exit calls in tests.
@@ -332,6 +334,9 @@ func (stubProvider) GetLogs(ctx context.Context, address string, from, to uint64
 	return nil, nil
 }
 func (stubProvider) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
+	return nil, nil
+}
+func (stubProvider) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
 	return nil, nil
 }
 
@@ -697,4 +702,47 @@ func TestDefaultWiringFunctions(t *testing.T) {
 	if defaultNewIngestWithProvider("0x", ingest.Options{}, p) == nil {
 		t.Fatal("defaultNewIngestWithProvider returned nil")
 	}
+}
+
+func TestConfigureLoggingLevels(t *testing.T) {
+	original := logging.Logger()
+	ctx := context.Background()
+	cases := []struct {
+		name      string
+		level     string
+		wantDebug bool
+		wantInfo  bool
+		wantWarn  bool
+	}{
+		{name: "default", level: "", wantDebug: false, wantInfo: true, wantWarn: true},
+		{name: "invalid", level: "trace", wantDebug: false, wantInfo: true, wantWarn: true},
+		{name: "debug", level: "debug", wantDebug: true, wantInfo: true, wantWarn: true},
+		{name: "warn", level: "warn", wantDebug: false, wantInfo: false, wantWarn: true},
+		{name: "error", level: "error", wantDebug: false, wantInfo: false, wantWarn: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logging.SetLogger(original)
+			os.Unsetenv("INGEST_LOG_LEVEL")
+			if tc.level != "" {
+				t.Setenv("INGEST_LOG_LEVEL", tc.level)
+			}
+			configureLogging()
+			logger := logging.Logger()
+			if logger == nil {
+				t.Fatal("expected configured logger")
+			}
+			if got := logger.Enabled(ctx, slog.LevelDebug); got != tc.wantDebug {
+				t.Fatalf("debug enabled=%v want %v", got, tc.wantDebug)
+			}
+			if got := logger.Enabled(ctx, slog.LevelInfo); got != tc.wantInfo {
+				t.Fatalf("info enabled=%v want %v", got, tc.wantInfo)
+			}
+			if got := logger.Enabled(ctx, slog.LevelWarn); got != tc.wantWarn {
+				t.Fatalf("warn enabled=%v want %v", got, tc.wantWarn)
+			}
+		})
+	}
+	logging.SetLogger(original)
 }

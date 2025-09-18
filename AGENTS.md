@@ -36,7 +36,8 @@
 - Scope (MVP): Ethereum mainnet only; ingest external transactions, internal traces, ERC‑20/721/1155 transfers, approvals, and contract creation; classify counterparties (EOA vs contract; token/NFT/dApp) and persist to ClickHouse.
 - DB Choice: ClickHouse as primary OLAP store with native Vector Index (HNSW) for semantic search; append‑only writes with idempotent upserts and deduplication on `(tx_hash, log_index)`.
 - Reorg Safety & Delta: Maintain `addresses.last_synced_block`; process in block ranges with ≥12 confirmations; resume from checkpoints per data type; backfill first, then delta updates.
-- Ingestion (Go): provider‑agnostic RPC layer (Alchemy/Infura/QuickNode/Covalent adapters), shared `http.Client` with timeouts, retries with backoff, structured JSON logs. No live‑chain calls in CI; rely on recorded fixtures.
+- Ingestion (Go): provider-agnostic RPC layer (Alchemy/Infura/QuickNode/Covalent adapters), shared `http.Client` with timeouts, retries with backoff, structured JSON logs. No live-chain calls in CI; rely on recorded fixtures.
+- Receipt lookups log per-range metrics (`receipt_lookup` event with `receipt_calls`, `block_span`, `provider`) — wire these into dashboards to watch RPC fan-out and quotas (see `docs/observability.md`).
 - Normalization: unify tx/logs/traces into common schema columns exactly as in `sql/schema.sql` (ReplacingMergeTree, UTC `DateTime64(3)`), avoid floats (`*big.Int`/`bigint`/`Decimal`).
 - Enrichment: `eth_getCode` for EOA/contract, ERC‑165 probe, name/symbol/decimals, proxy detection (EIP‑1967/UUPS), curated label registry with confidence scoring; persist to `contracts` and `labels`.
 - API (TS): Fastify + Zod, Node 20+, ClickHouse HTTP client; endpoints for sync, summary, filtered lists (token/NFT/approvals/dApps), and semantic search over embeddings.

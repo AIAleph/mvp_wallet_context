@@ -112,6 +112,9 @@ func TestBackfillResumesFromCheckpoint(t *testing.T) {
 	if len(prov.calls) == 0 {
 		t.Fatal("expected GetLogs call")
 	}
+	if len(prov.txCalls) == 0 {
+		t.Fatal("expected Transactions call")
+	}
 	if prov.calls[0].from != 151 {
 		t.Fatalf("expected resume from 151, got %d", prov.calls[0].from)
 	}
@@ -209,6 +212,13 @@ func TestBackfillUsesDefaultBatchSize(t *testing.T) {
 	call := prov.calls[0]
 	if call.from != 0 || call.to != 120 {
 		t.Fatalf("unexpected range: %+v", call)
+	}
+	if len(prov.txCalls) != 1 {
+		t.Fatalf("expected single transaction batch, got %d", len(prov.txCalls))
+	}
+	txCall := prov.txCalls[0]
+	if txCall.from != 0 || txCall.to != 120 {
+		t.Fatalf("unexpected tx range: %+v", txCall)
 	}
 }
 

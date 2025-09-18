@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 	cfgpkg "github.com/AIAleph/mvp_wallet_context/internal/config"
 	"github.com/AIAleph/mvp_wallet_context/internal/eth"
 	"github.com/AIAleph/mvp_wallet_context/internal/ingest"
+	"github.com/AIAleph/mvp_wallet_context/internal/logging"
 )
 
 const (
@@ -71,6 +73,23 @@ func wireDefaults() {
 }
 
 func init() { wireDefaults() }
+
+func configureLogging() {
+	levelStr := strings.ToLower(env("INGEST_LOG_LEVEL", "info"))
+	var lvl slog.Level
+	switch levelStr {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl})
+	logging.SetLogger(slog.New(h))
+}
 
 // env gets an environment variable or returns a fallback.
 func env(key, def string) string {
@@ -159,6 +178,7 @@ func printUsage() {
 
 // MVP ingester entrypoint. Offers helpful flags, env fallbacks, and validation.
 func main() {
+	configureLogging()
 	// Load centralized defaults from env.
 	defaults := cfgpkg.Load()
 	var (

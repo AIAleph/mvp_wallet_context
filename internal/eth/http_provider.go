@@ -8,10 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/AIAleph/mvp_wallet_context/internal/logging"
 )
 
 var ErrUnsupported = errors.New("method not supported by provider")
@@ -23,11 +27,28 @@ type httpDoer interface {
 // httpProvider is a minimal JSON-RPC client for Ethereum endpoints.
 // It intentionally leaves rate limiting/retries to wrappers (RLProvider, etc.).
 type httpProvider struct {
-	endpoint    string
-	hc          httpDoer
-	maxRetries  int
-	backoffBase time.Duration
-	blkCache    *timestampCache
+	endpoint             string
+	providerLbl          string
+	hc                   httpDoer
+	maxRetries           int
+	backoffBase          time.Duration
+	blkCache             *timestampCache
+	receiptWorkers       int
+	blockReceiptsMu      sync.Mutex
+	blockReceiptsSupport receiptSupportState
+}
+
+type receiptSupportState int
+
+const (
+	receiptSupportUnknown receiptSupportState = iota
+	receiptSupportAvailable
+	receiptSupportUnavailable
+)
+
+type receiptLite struct {
+	gasUsed uint64
+	status  uint8
 }
 
 // NewHTTPProvider constructs a JSON-RPC provider using the given http.Client (or a default one if nil).
@@ -39,11 +60,14 @@ func NewHTTPProvider(endpoint string, client *http.Client) (Provider, error) {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
 	return &httpProvider{
-		endpoint:    endpoint,
-		hc:          client,
-		maxRetries:  2,
-		backoffBase: 100 * time.Millisecond,
-		blkCache:    newTimestampCache(defaultBlockTimestampCacheSize, defaultBlockTimestampTTL),
+		endpoint:             endpoint,
+		providerLbl:          deriveProviderLabel(endpoint),
+		hc:                   client,
+		maxRetries:           2,
+		backoffBase:          100 * time.Millisecond,
+		blkCache:             newTimestampCache(defaultBlockTimestampCacheSize, defaultBlockTimestampTTL),
+		receiptWorkers:       4,
+		blockReceiptsSupport: receiptSupportUnknown,
 	}, nil
 }
 
@@ -152,6 +176,23 @@ func (c *timestampCache) removeElement(el *list.Element) {
 	entry := el.Value.(*timestampCacheEntry)
 	delete(c.entries, entry.key)
 	c.ordered.Remove(el)
+}
+
+func deriveProviderLabel(endpoint string) string {
+	if endpoint == "" {
+		return ""
+	}
+	if u, err := url.Parse(endpoint); err == nil {
+		u.User = nil
+		if u.Host != "" {
+			return u.Host
+		}
+		if u.Scheme == "" {
+			return endpoint
+		}
+		return u.String()
+	}
+	return endpoint
 }
 
 func (p *httpProvider) call(ctx context.Context, method string, params interface{}, out interface{}) error {
@@ -392,6 +433,373 @@ func (p *httpProvider) TraceBlock(ctx context.Context, from, to uint64, address 
 		}
 	}
 	return all, nil
+}
+
+// Transactions walks blocks in the inclusive range and surfaces external
+// transactions touching the address. It opportunistically batches receipt
+// lookups and tolerates per-block/receipt failures, logging them as warnings
+// while still returning partial results when possible.
+func (p *httpProvider) Transactions(ctx context.Context, address string, from, to uint64) (result []Transaction, err error) {
+	if from > to {
+		return nil, nil
+	}
+	lowerAddr := strings.ToLower(address)
+	start := time.Now()
+	receiptCalls := 0
+	blockCalls := 0
+	txExamined := 0
+	txMatched := 0
+	receiptFailures := 0
+	blockFailures := 0
+	txSkipped := 0
+	span := to - from
+	if span != math.MaxUint64 {
+		span++
+	}
+	logger := logging.Logger()
+	var partialErr error
+	var partialErrs []error
+	defer func() {
+		if logger == nil {
+			return
+		}
+		fields := []any{
+			"component", "eth.http_provider.transactions",
+			"provider", p.providerLbl,
+			"address", lowerAddr,
+			"from_block", from,
+			"to_block", to,
+			"block_span", span,
+			"receipt_calls", receiptCalls,
+			"block_calls", blockCalls,
+			"tx_examined", txExamined,
+			"tx_matched", txMatched,
+			"tx_returned", len(result),
+			"block_failures", blockFailures,
+			"receipt_failures", receiptFailures,
+			"tx_skipped", txSkipped,
+			"elapsed_ms", time.Since(start).Milliseconds(),
+		}
+		if err != nil {
+			logger.Warn("receipt_lookup_failed", append(fields, "error", err.Error())...)
+			return
+		}
+		if partialErr != nil {
+			logger.Warn("receipt_lookup_partial", append(fields, "error", partialErr.Error())...)
+			return
+		}
+		logger.Info("receipt_lookup", fields...)
+	}()
+
+	type pendingTx struct {
+		hash      string
+		hashLower string
+		from      string
+		to        string
+		input     string
+		value     string
+		blockNum  uint64
+		tsMillis  int64
+	}
+
+	for blk := from; blk <= to; blk++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			partialErrs = append(partialErrs, ctxErr)
+			break
+		}
+		var block struct {
+			Timestamp    string `json:"timestamp"`
+			Transactions []struct {
+				Hash  string  `json:"hash"`
+				From  string  `json:"from"`
+				To    *string `json:"to"`
+				Input string  `json:"input"`
+				Value string  `json:"value"`
+			} `json:"transactions"`
+		}
+		params := []interface{}{toHex(blk), true}
+		blockCalls++
+		if callErr := p.call(ctx, "eth_getBlockByNumber", params, &block); callErr != nil {
+			blockFailures++
+			partialErrs = append(partialErrs, fmt.Errorf("block %d: %w", blk, callErr))
+			if blk == math.MaxUint64 {
+				break
+			}
+			continue
+		}
+		tsSec, tsErr := hexToUint64(block.Timestamp)
+		if tsErr != nil {
+			blockFailures++
+			partialErrs = append(partialErrs, fmt.Errorf("block %d timestamp: %w", blk, tsErr))
+			if blk == math.MaxUint64 {
+				break
+			}
+			continue
+		}
+		tsMillis := int64(tsSec) * 1000
+		pending := make([]pendingTx, 0, len(block.Transactions))
+		hashes := make([]string, 0, len(block.Transactions))
+		for _, tx := range block.Transactions {
+			txExamined++
+			fromLower := strings.ToLower(tx.From)
+			toLower := ""
+			if tx.To != nil {
+				toLower = strings.ToLower(*tx.To)
+			}
+			if fromLower != lowerAddr && toLower != lowerAddr {
+				continue
+			}
+			txMatched++
+			hashLower := strings.ToLower(tx.Hash)
+			pending = append(pending, pendingTx{
+				hash:      tx.Hash,
+				hashLower: hashLower,
+				from:      fromLower,
+				to:        toLower,
+				input:     tx.Input,
+				value:     tx.Value,
+				blockNum:  blk,
+				tsMillis:  tsMillis,
+			})
+			hashes = append(hashes, tx.Hash)
+		}
+		if len(pending) == 0 {
+			if blk == math.MaxUint64 {
+				break
+			}
+			continue
+		}
+		receipts, calls, failures, recErr := p.fetchReceiptsForBlock(ctx, blk, hashes)
+		receiptCalls += calls
+		receiptFailures += failures
+		if recErr != nil {
+			partialErrs = append(partialErrs, fmt.Errorf("block %d receipts: %w", blk, recErr))
+		}
+		for _, tx := range pending {
+			rec, ok := receipts[tx.hashLower]
+			if !ok {
+				txSkipped++
+				continue
+			}
+			result = append(result, Transaction{
+				Hash:     tx.hash,
+				From:     tx.from,
+				To:       tx.to,
+				ValueWei: tx.value,
+				InputHex: tx.input,
+				GasUsed:  rec.gasUsed,
+				Status:   rec.status,
+				BlockNum: tx.blockNum,
+				TsMillis: tx.tsMillis,
+			})
+		}
+		if blk == math.MaxUint64 {
+			break
+		}
+	}
+	if len(result) == 0 && len(partialErrs) > 0 {
+		err = errors.Join(partialErrs...)
+		return nil, err
+	}
+	if len(partialErrs) > 0 {
+		partialErr = errors.Join(partialErrs...)
+	}
+	return result, nil
+}
+
+func (p *httpProvider) fetchReceiptsForBlock(ctx context.Context, block uint64, hashes []string) (map[string]receiptLite, int, int, error) {
+	out := make(map[string]receiptLite, len(hashes))
+	if len(hashes) == 0 {
+		return out, 0, 0, nil
+	}
+	hashSet := make(map[string]struct{}, len(hashes))
+	for _, h := range hashes {
+		hashSet[strings.ToLower(h)] = struct{}{}
+	}
+	useBlockReceipts := p.shouldUseBlockReceipts(len(hashes))
+	totalCalls := 0
+	failures := 0
+	var joinedErr error
+	if useBlockReceipts {
+		recs, err := p.callBlockReceipts(ctx, block, hashSet)
+		totalCalls++
+		if err == nil {
+			for k, v := range recs {
+				out[k] = v
+			}
+			missing := make([]string, 0)
+			for _, h := range hashes {
+				if _, ok := out[strings.ToLower(h)]; !ok {
+					missing = append(missing, h)
+				}
+			}
+			p.setBlockReceiptsState(receiptSupportAvailable)
+			if len(missing) == 0 {
+				return out, totalCalls, 0, nil
+			}
+			perTx, calls, perFailures, perErr := p.fetchReceiptsIndividually(ctx, missing)
+			for k, v := range perTx {
+				out[k] = v
+			}
+			totalCalls += calls
+			failures += perFailures
+			if perErr != nil {
+				joinedErr = errors.Join(joinedErr, perErr)
+			}
+			return out, totalCalls, failures, joinedErr
+		}
+		if isMethodNotFound(err) {
+			p.setBlockReceiptsState(receiptSupportUnavailable)
+		} else {
+			joinedErr = err
+		}
+	}
+	perTx, calls, perFailures, err := p.fetchReceiptsIndividually(ctx, hashes)
+	for k, v := range perTx {
+		out[k] = v
+	}
+	totalCalls += calls
+	failures += perFailures
+	if err != nil {
+		joinedErr = errors.Join(joinedErr, err)
+	}
+	return out, totalCalls, failures, joinedErr
+}
+
+func (p *httpProvider) fetchReceiptsIndividually(ctx context.Context, hashes []string) (map[string]receiptLite, int, int, error) {
+	out := make(map[string]receiptLite, len(hashes))
+	if len(hashes) == 0 {
+		return out, 0, 0, nil
+	}
+	workers := p.receiptWorkers
+	if workers <= 0 {
+		workers = 1
+	}
+	sem := make(chan struct{}, workers)
+	type result struct {
+		hashLower string
+		receipt   receiptLite
+		err       error
+	}
+	resCh := make(chan result, len(hashes))
+	var wg sync.WaitGroup
+	for _, h := range hashes {
+		hash := h
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := ctx.Err(); err != nil {
+				resCh <- result{err: err}
+				return
+			}
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			var receipt struct {
+				Status  string `json:"status"`
+				GasUsed string `json:"gasUsed"`
+			}
+			if callErr := p.call(ctx, "eth_getTransactionReceipt", []interface{}{hash}, &receipt); callErr != nil {
+				resCh <- result{err: fmt.Errorf("receipt %s: %w", hash, callErr)}
+				return
+			}
+			gasUsed, gasErr := hexToUint64(receipt.GasUsed)
+			if gasErr != nil {
+				resCh <- result{err: fmt.Errorf("receipt %s gasUsed: %w", hash, gasErr)}
+				return
+			}
+			statusVal := uint8(1)
+			if receipt.Status != "" {
+				s, statusErr := hexToUint64(receipt.Status)
+				if statusErr != nil {
+					resCh <- result{err: fmt.Errorf("receipt %s status: %w", hash, statusErr)}
+					return
+				}
+				statusVal = uint8(s)
+			}
+			hashLower := strings.ToLower(hash)
+			resCh <- result{hashLower: hashLower, receipt: receiptLite{gasUsed: gasUsed, status: statusVal}}
+		}()
+	}
+	wg.Wait()
+	close(resCh)
+	failures := 0
+	var errs []error
+	for res := range resCh {
+		if res.err != nil {
+			failures++
+			errs = append(errs, res.err)
+			continue
+		}
+		out[res.hashLower] = res.receipt
+	}
+	var joined error
+	if len(errs) > 0 {
+		joined = errors.Join(errs...)
+	}
+	return out, len(hashes), failures, joined
+}
+
+func (p *httpProvider) callBlockReceipts(ctx context.Context, block uint64, filter map[string]struct{}) (map[string]receiptLite, error) {
+	var recs []struct {
+		TxHash  string `json:"transactionHash"`
+		Status  string `json:"status"`
+		GasUsed string `json:"gasUsed"`
+	}
+	if err := p.call(ctx, "eth_getBlockReceipts", []interface{}{toHex(block)}, &recs); err != nil {
+		return nil, err
+	}
+	out := make(map[string]receiptLite, len(recs))
+	for _, rec := range recs {
+		hashLower := strings.ToLower(rec.TxHash)
+		if len(filter) > 0 {
+			if _, ok := filter[hashLower]; !ok {
+				continue
+			}
+		}
+		gasUsed, err := hexToUint64(rec.GasUsed)
+		if err != nil {
+			return nil, fmt.Errorf("block receipt %s gasUsed: %w", rec.TxHash, err)
+		}
+		statusVal := uint8(1)
+		if rec.Status != "" {
+			s, err := hexToUint64(rec.Status)
+			if err != nil {
+				return nil, fmt.Errorf("block receipt %s status: %w", rec.TxHash, err)
+			}
+			statusVal = uint8(s)
+		}
+		out[hashLower] = receiptLite{gasUsed: gasUsed, status: statusVal}
+	}
+	return out, nil
+}
+
+func (p *httpProvider) shouldUseBlockReceipts(matchCount int) bool {
+	p.blockReceiptsMu.Lock()
+	defer p.blockReceiptsMu.Unlock()
+	switch p.blockReceiptsSupport {
+	case receiptSupportAvailable:
+		return true
+	case receiptSupportUnknown:
+		return matchCount > 1
+	default:
+		return false
+	}
+}
+
+func (p *httpProvider) setBlockReceiptsState(state receiptSupportState) {
+	p.blockReceiptsMu.Lock()
+	if p.blockReceiptsSupport != state {
+		p.blockReceiptsSupport = state
+	}
+	p.blockReceiptsMu.Unlock()
+}
+
+func isMethodNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "-32601") || strings.Contains(msg, "method not found")
 }
 
 // blockTimestampMillis fetches the block and returns timestamp in milliseconds.

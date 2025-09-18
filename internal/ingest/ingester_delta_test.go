@@ -34,8 +34,14 @@ func TestDeltaReprocessesReorgWindowAndUpdatesCursor(t *testing.T) {
 	if len(prov.calls) == 0 {
 		t.Fatal("expected GetLogs call")
 	}
+	if len(prov.txCalls) == 0 {
+		t.Fatal("expected Transactions call")
+	}
 	if got := prov.calls[0].from; got != 89 {
 		t.Fatalf("expected reorg start 89, got %d", got)
+	}
+	if got := prov.txCalls[0].from; got != 89 {
+		t.Fatalf("expected tx reorg start 89, got %d", got)
 	}
 	if len(rt.inserts) == 0 {
 		t.Fatal("expected addresses insert")
@@ -82,8 +88,14 @@ func TestDeltaClampsLastSyncedToSafeHead(t *testing.T) {
 	if len(prov.calls) == 0 {
 		t.Fatal("expected GetLogs call")
 	}
+	if len(prov.txCalls) == 0 {
+		t.Fatal("expected Transactions call")
+	}
 	if prov.calls[0].from != 29 || prov.calls[0].to != 40 {
 		t.Fatalf("unexpected range: %+v", prov.calls[0])
+	}
+	if prov.txCalls[0].from != 29 || prov.txCalls[0].to != 40 {
+		t.Fatalf("unexpected tx range: %+v", prov.txCalls[0])
 	}
 	if len(rt.inserts) == 0 {
 		t.Fatal("expected addresses insert")

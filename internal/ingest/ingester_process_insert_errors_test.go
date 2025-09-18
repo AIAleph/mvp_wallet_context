@@ -23,6 +23,9 @@ func (p provHeadOK) GetLogs(ctx context.Context, address string, from, to uint64
 func (p provHeadOK) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
 	return nil, nil
 }
+func (p provHeadOK) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return nil, nil
+}
 
 type provLogsErr struct{ h uint64 }
 
@@ -32,6 +35,9 @@ func (p provLogsErr) GetLogs(ctx context.Context, address string, from, to uint6
 	return nil, context.Canceled
 }
 func (p provLogsErr) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
+	return nil, nil
+}
+func (p provLogsErr) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
 	return nil, nil
 }
 
@@ -57,6 +63,9 @@ func (provMixed) GetLogs(ctx context.Context, address string, from, to uint64, t
 func (provMixed) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
 	return []eth.Trace{{TxHash: "0x3", TraceID: "root", From: address, To: address, ValueWei: "0x1", BlockNum: from}}, nil
 }
+func (provMixed) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return []eth.Transaction{{Hash: "0x6", From: address, To: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", BlockNum: from, Status: 1}}, nil
+}
 
 // Provider only approvals log
 type provOnlyApproval struct{}
@@ -75,6 +84,9 @@ func (provOnlyApproval) GetLogs(context.Context, string, uint64, uint64, [][]str
 func (provOnlyApproval) TraceBlock(context.Context, uint64, uint64, string) ([]eth.Trace, error) {
 	return []eth.Trace{{TxHash: "0x3", TraceID: "root", From: "0x", To: "0x", ValueWei: "0x1", BlockNum: 1}}, nil
 }
+func (provOnlyApproval) Transactions(context.Context, string, uint64, uint64) ([]eth.Transaction, error) {
+	return nil, nil
+}
 
 // Provider only traces
 type provOnlyTrace struct{}
@@ -86,6 +98,9 @@ func (provOnlyTrace) GetLogs(context.Context, string, uint64, uint64, [][]string
 }
 func (provOnlyTrace) TraceBlock(context.Context, uint64, uint64, string) ([]eth.Trace, error) {
 	return []eth.Trace{{TxHash: "0x5", TraceID: "root", From: "0x", To: "0x", ValueWei: "0x1", BlockNum: 1}}, nil
+}
+func (provOnlyTrace) Transactions(context.Context, string, uint64, uint64) ([]eth.Transaction, error) {
+	return nil, nil
 }
 
 func TestBackfill_ToZeroUsesHead_AndPropagatesProcessError(t *testing.T) {
@@ -152,6 +167,48 @@ func TestProcessRange_ErrorPaths_TokenApprovalsAndTraces(t *testing.T) {
 	}))
 	if err := ing3.processRange(context.Background(), 1, 1); err == nil {
 		t.Fatal("expected traces insert error")
+	}
+
+	ing4 := NewWithProvider("0xabc", Options{ClickHouseDSN: "http://localhost:8123/db", Schema: "dev"}, provMixed{})
+	ing4.ch.SetTransport(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		u, _ := url.Parse(r.URL.String())
+		q := u.Query().Get("query")
+		if strings.Contains(q, "dev_transactions") {
+			return &http.Response{StatusCode: 500, Body: ioNopCloser("oops")}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing4.processRange(context.Background(), 1, 1); err == nil {
+		t.Fatal("expected dev_transactions insert error")
+	}
+}
+
+func TestProcessRange_CanonicalInsertErrors(t *testing.T) {
+	prov := provCanonFull{}
+	ing := NewWithProvider("0xabc", Options{ClickHouseDSN: "http://localhost:8123/db", Schema: "canonical"}, prov)
+	ing.ch.SetTransport(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		u, _ := url.Parse(r.URL.String())
+		q := u.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO token_transfers") {
+			return &http.Response{StatusCode: 500, Body: ioNopCloser("oops")}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing.processRange(context.Background(), 1, 1); err == nil {
+		t.Fatal("expected canonical token_transfers insert error")
+	}
+
+	ing2 := NewWithProvider("0xabc", Options{ClickHouseDSN: "http://localhost:8123/db", Schema: "canonical"}, prov)
+	ing2.ch.SetTransport(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		u, _ := url.Parse(r.URL.String())
+		q := u.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO approvals") {
+			return &http.Response{StatusCode: 500, Body: ioNopCloser("oops")}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing2.processRange(context.Background(), 1, 1); err == nil {
+		t.Fatal("expected canonical approvals insert error")
 	}
 }
 
