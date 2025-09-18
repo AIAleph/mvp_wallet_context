@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/AIAleph/mvp_wallet_context/internal/logging"
 )
 
 type rtFunc func(*http.Request) (*http.Response, error)
@@ -482,5 +485,287 @@ func TestHTTPProvider_DoErrorThenSuccess(t *testing.T) {
 	n, err := p.BlockNumber(context.Background())
 	if err != nil || n != 42 || calls != 2 {
 		t.Fatalf("n=%d err=%v calls=%d", n, err, calls)
+	}
+}
+
+func TestHTTPProvider_TransactionsEmptyRange(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected call: %s", r.URL)
+		return nil, nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txs, err := p.Transactions(context.Background(), "0xabc", 5, 4)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(txs) != 0 {
+		t.Fatalf("expected no transactions, got %d", len(txs))
+	}
+}
+
+func TestHTTPProvider_TransactionsSuccessVariants(t *testing.T) {
+	const target = "0xAbCdEf00000000000000000000000000000000"
+	receipts := map[string]map[string]any{
+		"0xaaa": {"status": "0x0", "gasUsed": "0x5208"},
+		"0xbbb": {"status": "", "gasUsed": "0x5209"},
+		"0xccc": {"status": "0x1", "gasUsed": "0x1"},
+	}
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			block := map[string]any{
+				"timestamp": "0x64",
+				"transactions": []map[string]any{
+					{
+						"hash":  "0xaaa",
+						"from":  strings.ToUpper(target),
+						"to":    "0x1111111111111111111111111111111111111111",
+						"input": "0xa9059cbb00000000000000000000000000000000000000000000000000000064",
+						"value": "0xde",
+					},
+					{
+						"hash":  "0xbbb",
+						"from":  "0x2222222222222222222222222222222222222222",
+						"to":    strings.ToUpper(target),
+						"input": "0x",
+						"value": "0x1",
+					},
+					{
+						"hash":  "0xccc",
+						"from":  strings.ToUpper(target),
+						"to":    nil,
+						"input": "0xabcdef0123456789",
+						"value": "0x2",
+					},
+					{
+						"hash":  "0xddd",
+						"from":  "0x3333333333333333333333333333333333333333",
+						"to":    "0x4444444444444444444444444444444444444444",
+						"input": "0x",
+						"value": "0x3",
+					},
+				},
+			}
+			return mkResp(block), nil
+		case "eth_getTransactionReceipt":
+			params := req["params"].([]any)
+			hash := params[0].(string)
+			rec, ok := receipts[hash]
+			if !ok {
+				t.Fatalf("unexpected receipt request: %s", hash)
+			}
+			return mkResp(rec), nil
+		default:
+			return mkResp(nil), nil
+		}
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hp, ok := p.(*httpProvider); ok {
+		hp.backoffBase = 1
+	}
+	prev := logging.Logger()
+	logging.SetLogger(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	defer logging.SetLogger(prev)
+	txs, err := p.Transactions(context.Background(), target, 10, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(txs) != 3 {
+		t.Fatalf("expected 3 transactions, got %d", len(txs))
+	}
+	lowTarget := strings.ToLower(target)
+	m := make(map[string]Transaction)
+	for _, tx := range txs {
+		m[tx.Hash] = tx
+		if tx.TsMillis != 100000 {
+			t.Fatalf("timestamp mismatch for %s: %d", tx.Hash, tx.TsMillis)
+		}
+	}
+	if tx := m["0xaaa"]; tx.From != lowTarget || tx.Status != 0 || tx.GasUsed != 21000 {
+		t.Fatalf("tx 0xaaa mismatch: %+v", tx)
+	}
+	if tx := m["0xbbb"]; tx.To != lowTarget || tx.Status != 1 || tx.GasUsed != 21001 {
+		t.Fatalf("tx 0xbbb mismatch: %+v", tx)
+	}
+	if tx := m["0xccc"]; tx.To != "" || tx.Status != 1 || tx.GasUsed != 1 {
+		t.Fatalf("tx 0xccc mismatch: %+v", tx)
+	}
+}
+
+func TestHTTPProvider_TransactionsBlockError(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "eth_getBlockByNumber" {
+			return &http.Response{StatusCode: 500, Body: io.NopCloser(bytes.NewReader([]byte("oops")))}, nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Transactions(context.Background(), "0xbeef", 1, 1); err == nil {
+		t.Fatal("expected block call error")
+	}
+}
+
+func TestHTTPProvider_TransactionsReceiptError(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			block := map[string]any{
+				"timestamp": "0x1",
+				"transactions": []map[string]any{
+					{
+						"hash":  "0xaaa",
+						"from":  "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+						"to":    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+						"input": "0x",
+						"value": "0x1",
+					},
+				},
+			}
+			return mkResp(block), nil
+		case "eth_getTransactionReceipt":
+			return &http.Response{StatusCode: 500, Body: io.NopCloser(bytes.NewReader([]byte("bad")))}, nil
+		default:
+			return mkResp(nil), nil
+		}
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := logging.Logger()
+	logging.SetLogger(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	defer logging.SetLogger(prev)
+	if _, err := p.Transactions(context.Background(), "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1, 1); err == nil {
+		t.Fatal("expected receipt call error")
+	}
+}
+
+func TestHTTPProvider_TransactionsLoggerNil(t *testing.T) {
+	prev := logging.Logger()
+	logging.SetLogger(nil)
+	defer logging.SetLogger(prev)
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "eth_getBlockByNumber" {
+			block := map[string]any{"timestamp": "0x1", "transactions": []map[string]any{}}
+			return mkResp(block), nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txs, err := p.Transactions(context.Background(), "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(txs) != 0 {
+		t.Fatalf("expected no transactions, got %d", len(txs))
+	}
+}
+
+func TestHTTPProvider_TransactionsTimestampHexError(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "eth_getBlockByNumber" {
+			block := map[string]any{
+				"timestamp":    "0xzz",
+				"transactions": []map[string]any{},
+			}
+			return mkResp(block), nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := logging.Logger()
+	logging.SetLogger(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	defer logging.SetLogger(prev)
+	if _, err := p.Transactions(context.Background(), "0xabc", 1, 1); err == nil {
+		t.Fatal("expected timestamp hex parse error")
+	}
+}
+
+func TestHTTPProvider_TransactionsGasUsedHexError(t *testing.T) {
+	const target = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			block := map[string]any{
+				"timestamp": "0x1",
+				"transactions": []map[string]any{
+					{"hash": "0xaaa", "from": target, "to": target, "input": "0x", "value": "0x1"},
+				},
+			}
+			return mkResp(block), nil
+		case "eth_getTransactionReceipt":
+			return mkResp(map[string]any{"status": "0x1", "gasUsed": "0xzz"}), nil
+		default:
+			return mkResp(nil), nil
+		}
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := logging.Logger()
+	logging.SetLogger(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	defer logging.SetLogger(prev)
+	if _, err := p.Transactions(context.Background(), target, 1, 1); err == nil {
+		t.Fatal("expected gasUsed hex parse error")
+	}
+}
+
+func TestHTTPProvider_TransactionsStatusHexError(t *testing.T) {
+	const target = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			block := map[string]any{
+				"timestamp": "0x1",
+				"transactions": []map[string]any{
+					{"hash": "0xaaa", "from": target, "to": target, "input": "0x", "value": "0x1"},
+				},
+			}
+			return mkResp(block), nil
+		case "eth_getTransactionReceipt":
+			return mkResp(map[string]any{"status": "0xzz", "gasUsed": "0x1"}), nil
+		default:
+			return mkResp(nil), nil
+		}
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := logging.Logger()
+	logging.SetLogger(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	defer logging.SetLogger(prev)
+	if _, err := p.Transactions(context.Background(), target, 1, 1); err == nil {
+		t.Fatal("expected status hex parse error")
 	}
 }

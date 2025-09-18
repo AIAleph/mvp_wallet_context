@@ -61,4 +61,5 @@ type Transaction struct {
 	Status   uint8
 	BlockNum uint64
 	TsMillis int64
+	TraceID  string
 }

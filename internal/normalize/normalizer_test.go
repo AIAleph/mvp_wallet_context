@@ -162,6 +162,7 @@ func TestDecodeInputMethod(t *testing.T) {
 		"":               "",
 		"0x23b872ddabcd": "transferFr",
 		"0xabcdef012345": "0xabcdef01",
+		"0x00000000abcd": "",
 	}
 	for input, want := range cases {
 		if got := DecodeInputMethod(input); got != want {
@@ -198,5 +199,55 @@ func TestTransactionsToRows(t *testing.T) {
 	}
 	if row.IsInternal != 0 {
 		t.Fatalf("expected external transaction, got %d", row.IsInternal)
+	}
+}
+
+func TestTransactionsToRowsVariants(t *testing.T) {
+	txs := []eth.Transaction{{
+		Hash:     "0xdef",
+		From:     "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		To:       "",
+		ValueWei: "12345",
+		InputHex: "0x",
+		GasUsed:  42000,
+		Status:   0,
+		BlockNum: 55,
+		TsMillis: 999,
+	}}
+	rows := TransactionsToRows(txs, true)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d", len(rows))
+	}
+	row := rows[0]
+	if row.To != "" {
+		t.Fatalf("expected empty to address, got %q", row.To)
+	}
+	if row.IsInternal != 1 {
+		t.Fatalf("expected internal flag set, got %d", row.IsInternal)
+	}
+	if row.InputMethod != "" {
+		t.Fatalf("unexpected input method: %s", row.InputMethod)
+	}
+	if row.ValueRaw != "12345" {
+		t.Fatalf("expected decimal passthrough, got %s", row.ValueRaw)
+	}
+}
+
+func TestValueToDecimalString(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"0xde", "222"},
+		{" 0x2a ", "42"},
+		{"98765", "98765"},
+		{"", "0"},
+		{"not-a-number", "not-a-number"},
+		{"0X2a", "0"},
+	}
+	for _, tc := range cases {
+		if got := valueToDecimalString(tc.in); got != tc.want {
+			t.Fatalf("valueToDecimalString(%q)=%q want %q", tc.in, got, tc.want)
+		}
 	}
 }

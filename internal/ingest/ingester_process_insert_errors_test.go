@@ -183,6 +183,35 @@ func TestProcessRange_ErrorPaths_TokenApprovalsAndTraces(t *testing.T) {
 	}
 }
 
+func TestProcessRange_CanonicalInsertErrors(t *testing.T) {
+	prov := provCanonFull{}
+	ing := NewWithProvider("0xabc", Options{ClickHouseDSN: "http://localhost:8123/db", Schema: "canonical"}, prov)
+	ing.ch.SetTransport(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		u, _ := url.Parse(r.URL.String())
+		q := u.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO token_transfers") {
+			return &http.Response{StatusCode: 500, Body: ioNopCloser("oops")}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing.processRange(context.Background(), 1, 1); err == nil {
+		t.Fatal("expected canonical token_transfers insert error")
+	}
+
+	ing2 := NewWithProvider("0xabc", Options{ClickHouseDSN: "http://localhost:8123/db", Schema: "canonical"}, prov)
+	ing2.ch.SetTransport(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		u, _ := url.Parse(r.URL.String())
+		q := u.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO approvals") {
+			return &http.Response{StatusCode: 500, Body: ioNopCloser("oops")}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing2.processRange(context.Background(), 1, 1); err == nil {
+		t.Fatal("expected canonical approvals insert error")
+	}
+}
+
 // Helper RoundTripper and io.ReadCloser
 type roundTripFunc func(*http.Request) (*http.Response, error)
 

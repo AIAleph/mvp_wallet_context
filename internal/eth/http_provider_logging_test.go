@@ -23,6 +23,16 @@ func TestDeriveProviderLabel(t *testing.T) {
 			endpoint: "not a url",
 			expect:   "not a url",
 		},
+		{
+			name:     "empty endpoint",
+			endpoint: "",
+			expect:   "",
+		},
+		{
+			name:     "scheme without host",
+			endpoint: "localhost:8545",
+			expect:   "localhost:8545",
+		},
 	}
 
 	for _, tt := range tests {

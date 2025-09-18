@@ -151,7 +151,7 @@ func TransactionsToRows(in []eth.Transaction, isInternal bool) []TransactionRow 
 			Status:      tx.Status,
 			InputMethod: "",
 			IsInternal:  internalFlag,
-			TraceID:     "",
+			TraceID:     tx.TraceID,
 		}
 		if tx.To == "" {
 			row.To = ""

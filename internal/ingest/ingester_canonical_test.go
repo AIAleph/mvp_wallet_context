@@ -149,3 +149,59 @@ func TestProcessRange_CanonicalTransactionsRow(t *testing.T) {
 		t.Fatalf("expected external transaction, got %d", row.IsInternal)
 	}
 }
+
+type provCanonTraceTx struct{}
+
+func (provCanonTraceTx) BlockNumber(ctx context.Context) (uint64, error) { return 1, nil }
+func (provCanonTraceTx) BlockTimestamp(ctx context.Context, block uint64) (int64, error) {
+	return 1_000, nil
+}
+func (provCanonTraceTx) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
+	return nil, nil
+}
+func (provCanonTraceTx) GetLogs(ctx context.Context, address string, from, to uint64, topics [][]string) ([]eth.Log, error) {
+	return nil, nil
+}
+func (provCanonTraceTx) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return []eth.Transaction{{
+		Hash:     "0x5",
+		From:     address,
+		To:       address,
+		ValueWei: "0x1",
+		Status:   1,
+		BlockNum: from,
+		TsMillis: 4_000,
+		TraceID:  "trace-1",
+	}}, nil
+}
+
+func TestProcessRange_CanonicalTransactionTraceID(t *testing.T) {
+	ing := NewWithProvider("0xabc", Options{Schema: "canonical", ClickHouseDSN: "http://localhost:8123/db"}, provCanonTraceTx{})
+	var payload string
+	ing.ch.SetTransport(rtFunc(func(r *http.Request) (*http.Response, error) {
+		q := r.URL.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO transactions") {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			payload = strings.TrimSpace(string(body))
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing.processRange(context.Background(), 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if payload == "" {
+		t.Fatal("expected transactions insert payload")
+	}
+	var row struct {
+		TraceID string `json:"trace_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &row); err != nil {
+		t.Fatalf("decode insert: %v", err)
+	}
+	if row.TraceID != "trace-1" {
+		t.Fatalf("expected trace_id trace-1, got %s", row.TraceID)
+	}
+}
