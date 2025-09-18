@@ -91,9 +91,54 @@ run_clickhouse() {
   fi
 }
 
-declare -A MIGRATION_UP
-declare -A MIGRATION_DOWN
-declare -A MIGRATION_DESC
+MIGRATION_VERSIONS=()
+MIGRATION_UP_FILES=()
+MIGRATION_DOWN_FILES=()
+MIGRATION_DESCRIPTIONS=()
+
+migration_index() {
+  local version="$1"
+  local i
+  for i in "${!MIGRATION_VERSIONS[@]}"; do
+    if [[ "${MIGRATION_VERSIONS[$i]}" == "${version}" ]]; then
+      printf '%s\n' "${i}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+migration_has_version() {
+  migration_index "$1" >/dev/null 2>&1
+}
+
+migration_up_file() {
+  local idx
+  if ! idx=$(migration_index "$1"); then
+    return 1
+  fi
+  printf '%s\n' "${MIGRATION_UP_FILES[$idx]}"
+}
+
+migration_down_file() {
+  local idx
+  if ! idx=$(migration_index "$1"); then
+    return 1
+  fi
+  local file="${MIGRATION_DOWN_FILES[$idx]}"
+  if [[ -z "${file}" ]]; then
+    return 1
+  fi
+  printf '%s\n' "${file}"
+}
+
+migration_description() {
+  local idx
+  if ! idx=$(migration_index "$1"); then
+    return 1
+  fi
+  printf '%s\n' "${MIGRATION_DESCRIPTIONS[$idx]}"
+}
 
 while IFS= read -r file; do
   base="$(basename "$file")"
@@ -101,24 +146,31 @@ while IFS= read -r file; do
   version=$((10#${version}))
   desc="${base#*_}"
   desc="${desc%.up.sql}"
-  MIGRATION_UP["${version}"]="${file}"
-  MIGRATION_DESC["${version}"]="${desc//_/ }"
+  MIGRATION_VERSIONS+=("${version}")
+  MIGRATION_UP_FILES+=("${file}")
+  MIGRATION_DESCRIPTIONS+=("${desc//_/ }")
+  MIGRATION_DOWN_FILES+=("")
 done < <(find "${MIGRATIONS_DIR}" -type f -name '*.up.sql' | sort)
 
 while IFS= read -r file; do
   base="$(basename "$file")"
   version="${base%%_*}"
   version=$((10#${version}))
-  MIGRATION_DOWN["${version}"]="${file}"
+  if idx=$(migration_index "${version}"); then
+    MIGRATION_DOWN_FILES["${idx}"]="${file}"
+  fi
 done < <(find "${MIGRATIONS_DIR}" -type f -name '*.down.sql' | sort)
 
-if ((${#MIGRATION_UP[@]} == 0)); then
+if ((${#MIGRATION_VERSIONS[@]} == 0)); then
   echo "No migrations found under ${MIGRATIONS_DIR}" >&2
   exit 1
 fi
 
-mapfile -t ALL_VERSIONS < <(printf '%s\n' "${!MIGRATION_UP[@]}" | sort -n)
-LATEST_VERSION="${ALL_VERSIONS[-1]}"
+ALL_VERSIONS=()
+while IFS= read -r ver; do
+  ALL_VERSIONS+=("${ver}")
+done < <(printf '%s\n' "${MIGRATION_VERSIONS[@]}" | sort -n)
+LATEST_VERSION="${ALL_VERSIONS[$(( ${#ALL_VERSIONS[@]} - 1 ))]}"
 
 resolve_target_version() {
   local target="${1}"
@@ -154,7 +206,7 @@ if [[ -z "${TARGET_VERSION}" ]]; then
   exit 2
 fi
 
-if [[ -z "${MIGRATION_UP[${TARGET_VERSION}]}" && "${TARGET_VERSION}" != "0" ]]; then
+if [[ "${TARGET_VERSION}" != "0" ]] && ! migration_has_version "${TARGET_VERSION}"; then
   echo "No migration file registered for version ${TARGET_VERSION}." >&2
   exit 2
 fi
@@ -212,8 +264,15 @@ remove_schema_version_entry() {
 
 apply_migration_up() {
   local version="$1"
-  local file="${MIGRATION_UP[${version}]}"
-  local description="${MIGRATION_DESC[${version}]}"
+  local file
+  if ! file=$(migration_up_file "${version}"); then
+    echo "No up migration available for version ${version}" >&2
+    exit 1
+  fi
+  local description=""
+  if ! description=$(migration_description "${version}"); then
+    description=""
+  fi
   if truthy "${DRY_RUN}"; then
     echo "[dry-run] Would apply up migration v${version} (${description}) using ${file}"
   else
@@ -225,11 +284,14 @@ apply_migration_up() {
 
 apply_migration_down() {
   local version="$1"
-  local file="${MIGRATION_DOWN[${version}]}"
-  local description="${MIGRATION_DESC[${version}]}"
-  if [[ -z "${file}" ]]; then
+  local file
+  if ! file=$(migration_down_file "${version}"); then
     echo "No down migration available for version ${version}" >&2
     exit 1
+  fi
+  local description=""
+  if ! description=$(migration_description "${version}"); then
+    description=""
   fi
   if truthy "${DRY_RUN}"; then
     echo "[dry-run] Would apply down migration v${version} (${description}) using ${file}"

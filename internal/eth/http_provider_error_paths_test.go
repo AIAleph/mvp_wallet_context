@@ -210,6 +210,26 @@ func TestHTTPProvider_TraceBlock_CallError(t *testing.T) {
 	}
 }
 
+func TestHTTPProvider_TraceBlock_Unsupported(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "trace_filter" {
+			payload, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      1,
+				"error":   map[string]any{"code": -32601, "message": "method not found"},
+			})
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(payload)), Header: http.Header{"Content-Type": []string{"application/json"}}}, nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, _ := NewHTTPProvider("http://unit-test", client)
+	if _, err := p.TraceBlock(context.Background(), 1, 2, "0x"); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("expected ErrUnsupported, got %v", err)
+	}
+}
+
 func TestHTTPProvider_TraceBlock_AfterIncrementPaging(t *testing.T) {
 	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 		var req map[string]any

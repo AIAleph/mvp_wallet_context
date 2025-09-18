@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,6 +58,11 @@ func (c *Client) SetTransport(rt http.RoundTripper) {
 	c.hc.Transport = rt
 }
 
+// Enabled reports whether the client is configured with a ClickHouse endpoint.
+func (c *Client) Enabled() bool {
+	return c != nil && c.endpoint != ""
+}
+
 func (c *Client) Ping(ctx context.Context) error {
 	if c.endpoint == "" {
 		return nil
@@ -85,6 +91,8 @@ func (c *Client) Ping(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// Close the body on every path so the connection returns to the pool even
+		// when JSON decoding aborts early.
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode/100 != 2 {
 			b, _ := io.ReadAll(resp.Body)
@@ -100,7 +108,7 @@ func (c *Client) InsertJSONEachRow(ctx context.Context, table string, rows []any
 	if len(rows) == 0 {
 		return nil
 	}
-	if c.endpoint == "" {
+	if !c.Enabled() {
 		return nil
 	}
 	// Build newline-delimited JSON
@@ -146,6 +154,60 @@ func (c *Client) InsertJSONEachRow(ctx context.Context, table string, rows []any
 	})
 }
 
+// QueryJSONEachRow executes a SELECT ... FORMAT JSONEachRow query and returns the
+// decoded rows as raw JSON blobs. It intentionally keeps a minimal surface area
+// for ingestion cursors without introducing a full query builder.
+func (c *Client) QueryJSONEachRow(ctx context.Context, query string) ([]json.RawMessage, error) {
+	if !c.Enabled() {
+		return nil, nil
+	}
+	u, err := url.Parse(c.endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, nil
+	}
+	q := u.Query()
+	q.Set("query", query)
+	u.RawQuery = q.Encode()
+	var result []json.RawMessage
+	if err := doWithRetry(ctx, func() error {
+		local := make([]json.RawMessage, 0, 4)
+		reqCtx, cancel := c.requestContext(ctx)
+		defer cancel()
+		req, err := httpNewRequest(reqCtx, http.MethodGet, u.String(), nil)
+		if err != nil {
+			return err
+		}
+		resp, err := c.hc.Do(req)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode/100 != 2 {
+			b, _ := io.ReadAll(resp.Body)
+			return &httpStatusErr{code: resp.StatusCode, body: string(b), op: "query"}
+		}
+		dec := json.NewDecoder(resp.Body)
+		for {
+			var raw json.RawMessage
+			if err := dec.Decode(&raw); err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				return err
+			}
+			local = append(local, append(json.RawMessage(nil), raw...))
+		}
+		result = local
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // sanitizeIdent prevents injection in table identifiers for simple cases.
 func sanitizeIdent(s string) string {
 	return strings.Map(func(r rune) rune {
@@ -157,9 +219,14 @@ func sanitizeIdent(s string) string {
 }
 
 // Retry policy (tunable in tests)
+const (
+	defaultRetryAttempts = 3
+	defaultRetryBackoff  = 10 * time.Millisecond
+)
+
 var (
-	retryAttempts    = 3
-	retryBackoffBase = 10 * time.Millisecond
+	retryAttempts    = defaultRetryAttempts
+	retryBackoffBase = defaultRetryBackoff
 )
 
 type httpStatusErr struct {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -336,6 +337,9 @@ func (p *httpProvider) TraceBlock(ctx context.Context, from, to uint64, address 
 			} `json:"action"`
 		}
 		if err := p.call(ctx, "trace_filter", params, &raw); err != nil {
+			if strings.Contains(err.Error(), "rpc -32601") || strings.Contains(err.Error(), "trace_filter") {
+				return nil, ErrUnsupported
+			}
 			return nil, err
 		}
 		if len(raw) == 0 {
