@@ -324,7 +324,6 @@ func main() {
 	} else {
 		ing = newIngest(address, opts)
 	}
-	var err error
 	switch mode {
 	case "backfill":
 		err = ing.Backfill(ctx)
