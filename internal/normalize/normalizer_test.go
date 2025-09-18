@@ -160,7 +160,7 @@ func TestDecodeInputMethod(t *testing.T) {
 		"0x095ea7b3dead": "approve",
 		"0x123":          "",
 		"":               "",
-		"0x23b872ddabcd": "transferFr",
+		"0x23b872ddabcd": "transferFrom",
 		"0xabcdef012345": "0xabcdef01",
 		"0x00000000abcd": "",
 	}

@@ -91,7 +91,7 @@ Primary tables (simplified DDL):
   - Engine: ReplacingMergeTree(last_synced_at) PARTITION BY toYYYYMM(first_seen_ts) ORDER BY (address)
 
 - transactions (external + normalized internal traces)
-  - tx_hash String, block_number UInt64, ts DateTime64(3), from_addr String, to_addr String, value_wei Decimal(38,0), gas_used UInt64, status UInt8, input_method FixedString(10) NULL, is_internal UInt8, trace_id String NULL
+  - tx_hash String, block_number UInt64, ts DateTime64(3), from_addr String, to_addr String, value_wei Decimal(38,0), gas_used UInt64, status UInt8, input_method String NULL, is_internal UInt8, trace_id String NULL
   - Engine: ReplacingMergeTree(ts) PARTITION BY toYYYYMM(ts) ORDER BY (to_addr, from_addr, ts, tx_hash)
 
 - token_transfers

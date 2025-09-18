@@ -89,8 +89,8 @@ func TracesToRows(in []eth.Trace) []TraceRow {
 var selectorNames = map[string]string{
 	"0xa9059cbb": "transfer",
 	"0x095ea7b3": "approve",
-	"0x23b872dd": "transferFr", // truncated to 10 chars
-	"0x42842e0e": "safeTransf", // safeTransferFrom
+	"0x23b872dd": "transferFrom",
+	"0x42842e0e": "safeTransferFrom",
 	"0x40c10f19": "mint",
 	"0x4e71d92d": "claim",
 	"0x0181b8ae": "deposit",

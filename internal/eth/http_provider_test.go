@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -19,6 +21,11 @@ func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r)
 
 func mkResp(v any) *http.Response {
 	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "result": v})
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(b)), Header: http.Header{"Content-Type": []string{"application/json"}}}
+}
+
+func mkRespErr(code int, msg string) *http.Response {
+	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "error": map[string]any{"code": code, "message": msg}})
 	return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(b)), Header: http.Header{"Content-Type": []string{"application/json"}}}
 }
 
@@ -508,11 +515,6 @@ func TestHTTPProvider_TransactionsEmptyRange(t *testing.T) {
 
 func TestHTTPProvider_TransactionsSuccessVariants(t *testing.T) {
 	const target = "0xAbCdEf00000000000000000000000000000000"
-	receipts := map[string]map[string]any{
-		"0xaaa": {"status": "0x0", "gasUsed": "0x5208"},
-		"0xbbb": {"status": "", "gasUsed": "0x5209"},
-		"0xccc": {"status": "0x1", "gasUsed": "0x1"},
-	}
 	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 		var req map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -552,14 +554,15 @@ func TestHTTPProvider_TransactionsSuccessVariants(t *testing.T) {
 				},
 			}
 			return mkResp(block), nil
+		case "eth_getBlockReceipts":
+			return mkResp([]map[string]any{
+				{"transactionHash": "0xaaa", "status": "0x0", "gasUsed": "0x5208"},
+				{"transactionHash": "0xbbb", "status": "", "gasUsed": "0x5209"},
+				{"transactionHash": "0xccc", "status": "0x1", "gasUsed": "0x1"},
+			}), nil
 		case "eth_getTransactionReceipt":
-			params := req["params"].([]any)
-			hash := params[0].(string)
-			rec, ok := receipts[hash]
-			if !ok {
-				t.Fatalf("unexpected receipt request: %s", hash)
-			}
-			return mkResp(rec), nil
+			t.Fatalf("unexpected per-transaction receipt call")
+			return nil, nil
 		default:
 			return mkResp(nil), nil
 		}
@@ -597,6 +600,182 @@ func TestHTTPProvider_TransactionsSuccessVariants(t *testing.T) {
 	}
 	if tx := m["0xccc"]; tx.To != "" || tx.Status != 1 || tx.GasUsed != 1 {
 		t.Fatalf("tx 0xccc mismatch: %+v", tx)
+	}
+}
+
+func TestHTTPProvider_TransactionsFallbackToPerReceipt(t *testing.T) {
+	const target = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	receipts := map[string]map[string]any{
+		"0xaaa": {"status": "0x1", "gasUsed": "0x5208"},
+		"0xbbb": {"status": "0x1", "gasUsed": "0x5209"},
+	}
+	blockReceiptCalls := 0
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			block := map[string]any{
+				"timestamp": "0x64",
+				"transactions": []map[string]any{
+					{"hash": "0xaaa", "from": target, "to": target, "input": "0x", "value": "0x1"},
+					{"hash": "0xbbb", "from": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "to": target, "input": "0x", "value": "0x2"},
+				},
+			}
+			return mkResp(block), nil
+		case "eth_getBlockReceipts":
+			blockReceiptCalls++
+			return mkRespErr(-32601, "method not found"), nil
+		case "eth_getTransactionReceipt":
+			params := req["params"].([]any)
+			hash := params[0].(string)
+			rec, ok := receipts[hash]
+			if !ok {
+				t.Fatalf("unexpected receipt request: %s", hash)
+				return nil, nil
+			}
+			return mkResp(rec), nil
+		default:
+			return mkResp(nil), nil
+		}
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hp, ok := p.(*httpProvider); ok {
+		hp.backoffBase = 1
+		hp.receiptWorkers = 2
+	}
+	prev := logging.Logger()
+	logging.SetLogger(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	defer logging.SetLogger(prev)
+
+	txs, err := p.Transactions(context.Background(), target, 10, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(txs) != 2 {
+		t.Fatalf("expected 2 transactions, got %d", len(txs))
+	}
+	if blockReceiptCalls != 1 {
+		t.Fatalf("expected single block receipt attempt, got %d", blockReceiptCalls)
+	}
+
+	txs2, err := p.Transactions(context.Background(), target, 10, 10)
+	if err != nil {
+		t.Fatalf("second call unexpected error: %v", err)
+	}
+	if len(txs2) != 2 {
+		t.Fatalf("expected 2 transactions on second call, got %d", len(txs2))
+	}
+	if blockReceiptCalls != 1 {
+		t.Fatalf("expected no additional block receipt attempts, got %d", blockReceiptCalls)
+	}
+}
+
+func TestHTTPProvider_TransactionsSkipsMissingReceipts(t *testing.T) {
+	const target = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			block := map[string]any{
+				"timestamp": "0x64",
+				"transactions": []map[string]any{
+					{"hash": "0xaaa", "from": target, "to": target, "input": "0x", "value": "0x1"},
+					{"hash": "0xbbb", "from": target, "to": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "input": "0x", "value": "0x2"},
+				},
+			}
+			return mkResp(block), nil
+		case "eth_getBlockReceipts":
+			return mkResp([]map[string]any{
+				{"transactionHash": "0xaaa", "status": "0x1", "gasUsed": "0x5208"},
+			}), nil
+		default:
+			return mkResp(nil), nil
+		}
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hp, ok := p.(*httpProvider); ok {
+		hp.backoffBase = 1
+	}
+	prev := logging.Logger()
+	logging.SetLogger(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	defer logging.SetLogger(prev)
+
+	txs, err := p.Transactions(context.Background(), target, 10, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(txs) != 1 {
+		t.Fatalf("expected 1 transaction with available receipt, got %d", len(txs))
+	}
+	if txs[0].Hash != "0xaaa" {
+		t.Fatalf("expected only tx 0xaaa, got %+v", txs[0])
+	}
+}
+
+func TestHTTPProvider_TransactionsContextCancellation(t *testing.T) {
+	const target = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			params := req["params"].([]any)
+			blk := params[0].(string)
+			if blk == "0x1" {
+				block := map[string]any{
+					"timestamp": "0x64",
+					"transactions": []map[string]any{
+						{"hash": "0xaaa", "from": target, "to": target, "input": "0x", "value": "0x1"},
+					},
+				}
+				return mkResp(block), nil
+			}
+			if blk == "0x2" {
+				return mkResp(map[string]any{
+					"timestamp":    "0x65",
+					"transactions": []map[string]any{{"hash": "0xbbb", "from": target, "to": target, "input": "0x", "value": "0x2"}},
+				}), nil
+			}
+		case "eth_getTransactionReceipt":
+			params := req["params"].([]any)
+			hash := params[0].(string)
+			if hash == "0xaaa" {
+				cancel()
+				return mkResp(map[string]any{"status": "0x1", "gasUsed": "0x5208"}), nil
+			}
+			return mkResp(map[string]any{"status": "0x1", "gasUsed": "0x5209"}), nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hp, ok := p.(*httpProvider); ok {
+		hp.backoffBase = 1
+	}
+	prev := logging.Logger()
+	logging.SetLogger(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	defer logging.SetLogger(prev)
+
+	txs, err := p.Transactions(ctx, target, 1, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(txs) != 1 {
+		t.Fatalf("expected 1 transaction before cancellation, got %d", len(txs))
+	}
+	if txs[0].Hash != "0xaaa" {
+		t.Fatalf("unexpected transaction %+v", txs[0])
 	}
 }
 
@@ -652,6 +831,425 @@ func TestHTTPProvider_TransactionsReceiptError(t *testing.T) {
 	defer logging.SetLogger(prev)
 	if _, err := p.Transactions(context.Background(), "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1, 1); err == nil {
 		t.Fatal("expected receipt call error")
+	}
+}
+
+func TestHTTPProvider_BlockReceiptsGasHexError(t *testing.T) {
+	const target = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			block := map[string]any{
+				"timestamp": "0x64",
+				"transactions": []map[string]any{
+					{"hash": "0xaaa", "from": target, "to": target, "input": "0x", "value": "0x1"},
+					{"hash": "0xbbb", "from": target, "to": target, "input": "0x", "value": "0x2"},
+				},
+			}
+			return mkResp(block), nil
+		case "eth_getBlockReceipts":
+			return mkResp([]map[string]any{
+				{"transactionHash": "0xaaa", "status": "0x1", "gasUsed": "0xzz"},
+				{"transactionHash": "0xbbb", "status": "0x1", "gasUsed": "0x5208"},
+			}), nil
+		default:
+			return mkResp(nil), nil
+		}
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hp, ok := p.(*httpProvider); ok {
+		hp.backoffBase = 1
+	}
+	prev := logging.Logger()
+	logging.SetLogger(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	defer logging.SetLogger(prev)
+	if _, err := p.Transactions(context.Background(), target, 10, 10); err == nil {
+		t.Fatal("expected gasUsed hex parse error")
+	}
+}
+
+func TestHTTPProvider_BlockReceiptsStatusHexError(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "eth_getBlockReceipts" {
+			return mkResp([]map[string]any{{"transactionHash": "0xaaa", "status": "0xzz", "gasUsed": "0x5208"}}), nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hp := p.(*httpProvider)
+	if _, err := hp.callBlockReceipts(context.Background(), 10, map[string]struct{}{"0xaaa": {}}); err == nil {
+		t.Fatal("expected status hex parse error")
+	}
+}
+
+func TestHTTPProvider_TransactionsSingleMatchUsesPerReceipt(t *testing.T) {
+	const target = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	receiptCalls := 0
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			block := map[string]any{
+				"timestamp":    "0x64",
+				"transactions": []map[string]any{{"hash": "0xaaa", "from": target, "to": target, "input": "0x", "value": "0x1"}},
+			}
+			return mkResp(block), nil
+		case "eth_getBlockReceipts":
+			t.Fatal("block receipts should not be called for single match")
+		case "eth_getTransactionReceipt":
+			receiptCalls++
+			return mkResp(map[string]any{"status": "0x1", "gasUsed": "0x5208"}), nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hp, ok := p.(*httpProvider); ok {
+		hp.backoffBase = 1
+	}
+	txs, err := p.Transactions(context.Background(), target, 10, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(txs) != 1 {
+		t.Fatalf("expected 1 tx, got %d", len(txs))
+	}
+	if receiptCalls != 1 {
+		t.Fatalf("expected 1 receipt call, got %d", receiptCalls)
+	}
+}
+
+func TestHTTPProvider_TransactionsMaxUint64(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "eth_getBlockByNumber" {
+			params := req["params"].([]any)
+			if params[0] != "0xffffffffffffffff" {
+				t.Fatalf("unexpected block param: %v", params[0])
+			}
+			return mkResp(map[string]any{"timestamp": "0x64", "transactions": []map[string]any{}}), nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hp, ok := p.(*httpProvider); ok {
+		hp.backoffBase = 1
+	}
+	txs, err := p.Transactions(context.Background(), "0xabc", math.MaxUint64, math.MaxUint64)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(txs) != 0 {
+		t.Fatalf("expected no transactions, got %d", len(txs))
+	}
+}
+
+func TestHTTPProvider_TransactionsPartialBlockFailure(t *testing.T) {
+	const target = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			params := req["params"].([]any)
+			blk := params[0].(string)
+			if blk == "0xa" {
+				return mkResp(map[string]any{
+					"timestamp":    "0x64",
+					"transactions": []map[string]any{{"hash": "0xaaa", "from": target, "to": target, "input": "0x", "value": "0x1"}},
+				}), nil
+			}
+			return &http.Response{StatusCode: 500, Body: io.NopCloser(bytes.NewReader([]byte("boom")))}, nil
+		case "eth_getTransactionReceipt":
+			return mkResp(map[string]any{"status": "0x1", "gasUsed": "0x5208"}), nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hp, ok := p.(*httpProvider); ok {
+		hp.backoffBase = 1
+	}
+	txs, err := p.Transactions(context.Background(), target, 10, 11)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(txs) != 1 {
+		t.Fatalf("expected partial success, got %d", len(txs))
+	}
+}
+
+func TestHTTPProvider_CallBlockReceiptsNoFilter(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "eth_getBlockReceipts" {
+			return mkResp([]map[string]any{{"transactionHash": "0xaaa", "status": "0x1", "gasUsed": "0x5208"}}), nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hp := p.(*httpProvider)
+	recs, callErr := hp.callBlockReceipts(context.Background(), 10, nil)
+	if callErr != nil {
+		t.Fatalf("unexpected error: %v", callErr)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 receipt, got %d", len(recs))
+	}
+	if recs["0xaaa"].gasUsed != 0x5208 {
+		t.Fatalf("unexpected gas value: %+v", recs["0xaaa"])
+	}
+}
+
+func TestHTTPProvider_FetchReceiptsForBlockAggregatesErrors(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockReceipts":
+			return &http.Response{StatusCode: 500, Body: io.NopCloser(bytes.NewReader([]byte("oops")))}, nil
+		case "eth_getTransactionReceipt":
+			return &http.Response{StatusCode: 500, Body: io.NopCloser(bytes.NewReader([]byte("bad")))}, nil
+		default:
+			return mkResp(nil), nil
+		}
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hp := p.(*httpProvider)
+	recs, calls, failures, ferr := hp.fetchReceiptsForBlock(context.Background(), 10, []string{"0xaaa", "0xbbb"})
+	if len(recs) != 0 {
+		t.Fatalf("expected no receipts, got %d", len(recs))
+	}
+	if calls == 0 {
+		t.Fatalf("expected at least one call, got %d", calls)
+	}
+	if failures != 2 {
+		t.Fatalf("failures=%d want 2", failures)
+	}
+	if ferr == nil {
+		t.Fatal("expected aggregated error")
+	}
+}
+
+func TestHTTPProvider_TransactionsBlockErrorAtMax(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "eth_getBlockByNumber" {
+			return &http.Response{StatusCode: 500, Body: io.NopCloser(bytes.NewReader([]byte("boom")))}, nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Transactions(context.Background(), "0xabc", math.MaxUint64, math.MaxUint64); err == nil {
+		t.Fatal("expected error for max block failure")
+	}
+}
+
+func TestHTTPProvider_TransactionsTimestampErrorAtMax(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "eth_getBlockByNumber" {
+			return mkResp(map[string]any{"timestamp": "0xzz", "transactions": []map[string]any{}}), nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := logging.Logger()
+	logging.SetLogger(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	defer logging.SetLogger(prev)
+	if _, err := p.Transactions(context.Background(), "0xabc", math.MaxUint64, math.MaxUint64); err == nil {
+		t.Fatal("expected timestamp parse error")
+	}
+}
+
+func TestHTTPProvider_TransactionsMaxUint64WithTx(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockByNumber":
+			return mkResp(map[string]any{
+				"timestamp":    "0x64",
+				"transactions": []map[string]any{{"hash": "0xaaa", "from": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "to": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "input": "0x", "value": "0x1"}},
+			}), nil
+		case "eth_getTransactionReceipt":
+			return mkResp(map[string]any{"status": "0x1", "gasUsed": "0x5208"}), nil
+		default:
+			return mkResp(nil), nil
+		}
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txs, err := p.Transactions(context.Background(), "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", math.MaxUint64, math.MaxUint64)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(txs) != 1 {
+		t.Fatalf("expected 1 tx, got %d", len(txs))
+	}
+}
+
+func TestHTTPProvider_FetchReceiptsForBlockEmpty(t *testing.T) {
+	hp := &httpProvider{}
+	recs, calls, failures, err := hp.fetchReceiptsForBlock(context.Background(), 10, nil)
+	if len(recs) != 0 || calls != 0 || failures != 0 || err != nil {
+		t.Fatalf("unexpected result: recs=%v calls=%d failures=%d err=%v", recs, calls, failures, err)
+	}
+}
+
+func TestHTTPProvider_FetchReceiptsIndividuallyEmpty(t *testing.T) {
+	hp := &httpProvider{}
+	recs, calls, failures, err := hp.fetchReceiptsIndividually(context.Background(), nil)
+	if len(recs) != 0 || calls != 0 || failures != 0 || err != nil {
+		t.Fatalf("unexpected result: recs=%v calls=%d failures=%d err=%v", recs, calls, failures, err)
+	}
+}
+
+func TestHTTPProvider_CallBlockReceiptsFilterSkip(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "eth_getBlockReceipts" {
+			return mkResp([]map[string]any{
+				{"transactionHash": "0xaaa", "status": "0x1", "gasUsed": "0x5208"},
+				{"transactionHash": "0xbbb", "status": "0x1", "gasUsed": "0x5209"},
+			}), nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hp := p.(*httpProvider)
+	filter := map[string]struct{}{"0xaaa": {}}
+	recs, callErr := hp.callBlockReceipts(context.Background(), 10, filter)
+	if callErr != nil {
+		t.Fatalf("unexpected error: %v", callErr)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 filtered receipt, got %d", len(recs))
+	}
+}
+
+func TestHTTPProvider_FetchReceiptsForBlockMissingFallbackError(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req["method"] {
+		case "eth_getBlockReceipts":
+			return mkResp([]map[string]any{{"transactionHash": "0xaaa", "status": "0x1", "gasUsed": "0x5208"}}), nil
+		case "eth_getTransactionReceipt":
+			return &http.Response{StatusCode: 500, Body: io.NopCloser(bytes.NewReader([]byte("fail")))}, nil
+		default:
+			return mkResp(nil), nil
+		}
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hp := p.(*httpProvider)
+	recs, calls, failures, ferr := hp.fetchReceiptsForBlock(context.Background(), 10, []string{"0xaaa", "0xbbb"})
+	if len(recs) != 1 {
+		t.Fatalf("expected single receipt, got %d", len(recs))
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 calls (1 block + 1 fallback), got %d", calls)
+	}
+	if failures != 1 {
+		t.Fatalf("expected 1 failure from fallback, got %d", failures)
+	}
+	if ferr == nil {
+		t.Fatal("expected fallback error")
+	}
+}
+
+func TestHTTPProvider_FetchReceiptsIndividuallyCancellation(t *testing.T) {
+	hp := &httpProvider{receiptWorkers: 0}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	receipts, calls, failures, err := hp.fetchReceiptsIndividually(ctx, []string{"0xaaa"})
+	if calls != 1 {
+		t.Fatalf("calls=%d want 1", calls)
+	}
+	if failures != 1 {
+		t.Fatalf("failures=%d want 1", failures)
+	}
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
+	}
+	if len(receipts) != 0 {
+		t.Fatalf("receipts len=%d want 0", len(receipts))
+	}
+}
+
+func TestHTTPProvider_ShouldUseBlockReceiptsStates(t *testing.T) {
+	p := &httpProvider{}
+	if p.shouldUseBlockReceipts(1) {
+		t.Fatal("expected false for unknown state and single match")
+	}
+	if !p.shouldUseBlockReceipts(2) {
+		t.Fatal("expected true for unknown state and multiple matches")
+	}
+	p.setBlockReceiptsState(receiptSupportUnavailable)
+	if p.shouldUseBlockReceipts(5) {
+		t.Fatal("expected false when marked unavailable")
+	}
+	p.setBlockReceiptsState(receiptSupportAvailable)
+	if !p.shouldUseBlockReceipts(1) {
+		t.Fatal("expected true when marked available")
+	}
+}
+
+func TestHTTPProvider_IsMethodNotFound(t *testing.T) {
+	if !isMethodNotFound(fmt.Errorf("rpc -32601: method not supported")) {
+		t.Fatal("expected detection for -32601")
+	}
+	if !isMethodNotFound(fmt.Errorf("Method not found")) {
+		t.Fatal("expected detection for method not found text")
+	}
+	if isMethodNotFound(fmt.Errorf("rpc -32000: error")) {
+		t.Fatal("did not expect detection for other errors")
+	}
+	if isMethodNotFound(nil) {
+		t.Fatal("nil error should return false")
 	}
 }
 

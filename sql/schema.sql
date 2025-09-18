@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   value_raw String,
   gas_used UInt64,
   status UInt8,
-  input_method Nullable(FixedString(10)),
+  input_method Nullable(String),
   is_internal UInt8,
   trace_id Nullable(String),
   ingested_at DateTime64(3, 'UTC') DEFAULT now64(3),
