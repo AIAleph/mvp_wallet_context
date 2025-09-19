@@ -451,26 +451,27 @@ func normalizeTransactionsForAddress(txs []eth.Transaction, target string) []nor
 		return nil
 	}
 	rows := normalize.TransactionsToRows(txs, false)
-	if target == "" || len(rows) == 0 {
-		return rows
-	}
-	addr := strings.ToLower(target)
-	filtered := rows[:0]
-	for _, row := range rows {
-		if row.From == addr || row.To == addr {
-			filtered = append(filtered, row)
-		}
-	}
-	return filtered
+	return filterTransactionsByAddress(rows, target)
 }
 
 func normalizeInternalTracesForAddress(traces []eth.Trace, target string) []normalize.TransactionRow {
 	if len(traces) == 0 {
 		return nil
 	}
-	txs := make([]eth.Transaction, 0, len(traces))
+	nonRoot := 0
 	for _, tr := range traces {
-		if tr.TraceID == "root" {
+		if strings.EqualFold(tr.TraceID, "root") {
+			continue
+		}
+		nonRoot++
+	}
+	if nonRoot == 0 {
+		return nil
+	}
+	txs := make([]eth.Transaction, 0, nonRoot)
+	for _, tr := range traces {
+		// Skip root traces as they represent the original transaction, not an internal call.
+		if strings.EqualFold(tr.TraceID, "root") {
 			continue
 		}
 		txs = append(txs, eth.Transaction{
@@ -485,6 +486,10 @@ func normalizeInternalTracesForAddress(traces []eth.Trace, target string) []norm
 		})
 	}
 	rows := normalize.TransactionsToRows(txs, true)
+	return filterTransactionsByAddress(rows, target)
+}
+
+func filterTransactionsByAddress(rows []normalize.TransactionRow, target string) []normalize.TransactionRow {
 	if target == "" || len(rows) == 0 {
 		return rows
 	}
