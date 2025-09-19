@@ -12,7 +12,7 @@ ALTER TABLE token_transfers
 ALTER TABLE token_transfers
     UPDATE batch_ordinal = multiIf(
         batch_ordinal = 0 AND length(splitByChar(':', event_uid)) = 3,
-        toUInt16(arrayElement(splitByChar(':', event_uid), 3)),
+        toUInt16OrZero(arrayElement(splitByChar(':', event_uid), 3)),
         batch_ordinal
     )
 WHERE batch_ordinal = 0
@@ -28,7 +28,7 @@ ALTER TABLE dev_token_transfers
 ALTER TABLE dev_token_transfers
     UPDATE batch_ordinal = multiIf(
         batch_ordinal = 0 AND length(splitByChar(':', event_uid)) = 3,
-        toUInt16(arrayElement(splitByChar(':', event_uid), 3)),
+        toUInt16OrZero(arrayElement(splitByChar(':', event_uid), 3)),
         batch_ordinal
     )
 WHERE batch_ordinal = 0

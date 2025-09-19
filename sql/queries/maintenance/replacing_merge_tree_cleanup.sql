@@ -38,6 +38,9 @@ LIMIT 50;
 
 SELECT tx_hash, log_index, token_id, batch_ordinal, count() AS rows
 FROM token_transfers FINAL
+WHERE block_number >= (
+    SELECT max(block_number) - 1000 FROM token_transfers
+) 
 GROUP BY tx_hash, log_index, token_id, batch_ordinal
 HAVING rows > 1
 ORDER BY rows DESC
