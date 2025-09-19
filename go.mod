@@ -1,7 +1,7 @@
 module github.com/AIAleph/mvp_wallet_context
 
-go 1.21
+go 1.24.0
 
-require golang.org/x/crypto v0.23.0
+require golang.org/x/crypto v0.42.0
 
-require golang.org/x/sys v0.20.0 // indirect
+require golang.org/x/sys v0.36.0 // indirect
