@@ -302,18 +302,7 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 	}
 	// Normalize and write according to schema mode
 	mode := i.SchemaMode()
-	txRows := normalize.TransactionsToRows(txs, false)
-	if i.address != "" && len(txRows) > 0 {
-		// Guard against providers that return broader ranges than requested.
-		filtered := make([]normalize.TransactionRow, 0, len(txRows))
-		addr := i.address
-		for _, row := range txRows {
-			if row.From == addr || row.To == addr {
-				filtered = append(filtered, row)
-			}
-		}
-		txRows = filtered
-	}
+	txRows := normalizeTransactionsForAddress(txs, i.address)
 	if mode == "canonical" {
 		// Logs
 		lrows := normalize.LogsToRows(logs)
@@ -449,6 +438,26 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 		}
 	}
 	return nil
+}
+
+// normalizeTransactionsForAddress converts provider transactions to canonical rows
+// and filters them for the target address with case-insensitive matching.
+func normalizeTransactionsForAddress(txs []eth.Transaction, target string) []normalize.TransactionRow {
+	if len(txs) == 0 {
+		return nil
+	}
+	rows := normalize.TransactionsToRows(txs, false)
+	if target == "" || len(rows) == 0 {
+		return rows
+	}
+	addr := strings.ToLower(target)
+	filtered := rows[:0]
+	for _, row := range rows {
+		if row.From == addr || row.To == addr {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
 }
 
 func (i *Ingester) getBlockTs(ctx context.Context, block uint64) (int64, bool) {
