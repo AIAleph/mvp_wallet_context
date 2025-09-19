@@ -453,7 +453,7 @@ func normalizeTransactionsForAddress(txs []eth.Transaction, target string) []nor
 	addr := strings.ToLower(target)
 	filtered := rows[:0]
 	for _, row := range rows {
-		if strings.EqualFold(row.From, addr) || strings.EqualFold(row.To, addr) {
+		if row.From == addr || row.To == addr {
 			filtered = append(filtered, row)
 		}
 	}
