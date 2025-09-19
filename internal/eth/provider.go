@@ -40,26 +40,29 @@ type Log struct {
 
 // Trace is a minimal scaffold of an internal trace. Extend as needed.
 type Trace struct {
-	TxHash   string
-	TraceID  string
-	From     string
-	To       string
-	ValueWei string // keep as string; decode to big.Int downstream
-	BlockNum uint64
-	TsMillis int64
+	TxHash          string
+	TraceID         string
+	From            string
+	To              string
+	ValueWei        string // keep as string; decode to big.Int downstream
+	BlockNum        uint64
+	TsMillis        int64
+	Type            string
+	CreatedContract string
 }
 
 // Transaction models an external transaction (is_internal=0). ValueWei remains
 // a string to avoid loss of precision when Jackson-coded into big.Int later on.
 type Transaction struct {
-	Hash     string
-	From     string
-	To       string
-	ValueWei string
-	InputHex string
-	GasUsed  uint64
-	Status   uint8
-	BlockNum uint64
-	TsMillis int64
-	TraceID  string
+	Hash            string
+	From            string
+	To              string
+	ValueWei        string
+	InputHex        string
+	GasUsed         uint64
+	Status          uint8
+	BlockNum        uint64
+	TsMillis        int64
+	TraceID         string
+	ContractAddress string
 }

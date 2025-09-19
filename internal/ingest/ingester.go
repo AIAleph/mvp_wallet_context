@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -333,18 +334,18 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 		rowsTransfers := make([]any, 0, len(tTransfers))
 		for _, r := range tTransfers {
 			rowsTransfers = append(rowsTransfers, map[string]any{
-				"event_uid":    r.EventUID,
-				"tx_hash":      r.TxHash,
-				"log_index":    r.LogIndex,
-				"token":        r.Token,
-				"from_addr":    r.From,
-				"to_addr":      r.To,
-				"amount_raw":   r.AmountRaw,
-				"token_id":     r.TokenID,
+				"event_uid":     r.EventUID,
+				"tx_hash":       r.TxHash,
+				"log_index":     r.LogIndex,
+				"token":         r.Token,
+				"from_addr":     r.From,
+				"to_addr":       r.To,
+				"amount_raw":    r.AmountRaw,
+				"token_id":      r.TokenID,
 				"batch_ordinal": r.BatchOrd,
-				"standard":     r.Standard,
-				"block_number": r.BlockNum,
-				"ts":           fmtDT64(r.TsMillis),
+				"standard":      r.Standard,
+				"block_number":  r.BlockNum,
+				"ts":            fmtDT64(r.TsMillis),
 			})
 		}
 		if err := i.ch.InsertJSONEachRow(ctx, "token_transfers", rowsTransfers); err != nil {
@@ -370,6 +371,24 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 		}
 		if err := i.ch.InsertJSONEachRow(ctx, "approvals", rowsApprovals); err != nil {
 			return fmt.Errorf("inserting approvals: %w", err)
+		}
+		contractCreations := collectContractCreations(txs, traces, i.address)
+		if len(contractCreations) > 0 {
+			rowsContracts := make([]any, 0, len(contractCreations))
+			for _, creation := range contractCreations {
+				rowsContracts = append(rowsContracts, map[string]any{
+					"address":          creation.address,
+					"is_contract":      uint8(1),
+					"name":             "",
+					"symbol":           "",
+					"decimals":         0,
+					"created_at_tx":    creation.txHash,
+					"first_seen_block": creation.blockNumber,
+				})
+			}
+			if err := i.ch.InsertJSONEachRow(ctx, "contracts", rowsContracts); err != nil {
+				return fmt.Errorf("inserting contracts: %w", err)
+			}
 		}
 		if len(txRows) > 0 {
 			rowsTx := make([]any, 0, len(txRows))
@@ -502,6 +521,77 @@ func filterTransactionsByAddress(rows []normalize.TransactionRow, target string)
 		}
 	}
 	return filtered
+}
+
+type contractCreation struct {
+	address     string
+	txHash      string
+	blockNumber uint64
+}
+
+func collectContractCreations(txs []eth.Transaction, traces []eth.Trace, target string) []contractCreation {
+	if len(txs) == 0 && len(traces) == 0 {
+		return nil
+	}
+	targetLower := strings.ToLower(strings.TrimSpace(target))
+	filterByTarget := targetLower != ""
+	seen := make(map[string]contractCreation)
+	add := func(addr, txHash string, block uint64) {
+		addr = strings.ToLower(strings.TrimSpace(addr))
+		txHash = strings.ToLower(strings.TrimSpace(txHash))
+		if addr == "" || txHash == "" {
+			return
+		}
+		if !addressPattern.MatchString(addr) {
+			return
+		}
+		current, ok := seen[addr]
+		if !ok || block < current.blockNumber || (block == current.blockNumber && txHash < current.txHash) {
+			seen[addr] = contractCreation{address: addr, txHash: txHash, blockNumber: block}
+		}
+	}
+	for _, tx := range txs {
+		if tx.To != "" {
+			continue
+		}
+		if tx.ContractAddress == "" {
+			continue
+		}
+		if filterByTarget && strings.ToLower(tx.From) != targetLower {
+			continue
+		}
+		add(tx.ContractAddress, tx.Hash, tx.BlockNum)
+	}
+	for _, tr := range traces {
+		if tr.CreatedContract == "" {
+			continue
+		}
+		if tr.Type != "create" && tr.Type != "create2" {
+			continue
+		}
+		if filterByTarget {
+			fromLower := strings.ToLower(strings.TrimSpace(tr.From))
+			toLower := strings.ToLower(strings.TrimSpace(tr.To))
+			if fromLower != targetLower && toLower != targetLower {
+				continue
+			}
+		}
+		add(tr.CreatedContract, tr.TxHash, tr.BlockNum)
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]contractCreation, 0, len(seen))
+	for _, c := range seen {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].blockNumber == out[j].blockNumber {
+			return out[i].address < out[j].address
+		}
+		return out[i].blockNumber < out[j].blockNumber
+	})
+	return out
 }
 
 func (i *Ingester) getBlockTs(ctx context.Context, block uint64) (int64, bool) {
