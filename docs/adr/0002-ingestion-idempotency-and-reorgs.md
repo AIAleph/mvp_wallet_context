@@ -63,7 +63,7 @@ Negative / Mitigations:
 
 ## Implementation Notes
 
-- Ensure canonical tables include `ingested_at` (DateTime64(3) UTC) as the ReplacingMergeTree version column and natural-key ORDER BY clauses.
+- Ensure canonical tables include `ingested_at` (DateTime64(3) UTC) as the ReplacingMergeTree version column and natural-key ORDER BY clauses (with `batch_ordinal=0` signaling non-batch transfers).
 - Keep `event_uid` / `trace_uid` populated in normalization helpers for traceability, but do not rely on them for deduplication.
 - Provide operators with `sql/queries/maintenance/replacing_merge_tree_cleanup.sql` showing the `OPTIMIZE ... FINAL` cadence per table, including duplicate checks on the new batch ordinal.
 - Keep N configurable via `SYNC_CONFIRMATIONS` (default 12).
