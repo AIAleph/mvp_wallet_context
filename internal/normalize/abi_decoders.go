@@ -155,9 +155,17 @@ func mustEventTopic(name string, types []string) string {
 }
 
 func signature(name string, inputs []abiArgument) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
 	types := make([]string, len(inputs))
 	for i, arg := range inputs {
-		types[i] = canonicalType(arg.Type)
+		typeName := canonicalType(arg.Type)
+		if typeName == "" {
+			return ""
+		}
+		types[i] = typeName
 	}
 	return fmt.Sprintf("%s(%s)", name, strings.Join(types, ","))
 }
