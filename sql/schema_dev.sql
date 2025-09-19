@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS dev_logs (
   ts_millis Int64,
   INDEX idx_dev_logs_addr address TYPE bloom_filter GRANULARITY 2,
   INDEX idx_dev_logs_block block_number TYPE minmax GRANULARITY 1
-) ENGINE = MergeTree ORDER BY (event_uid);
+) ENGINE = MergeTree ORDER BY (tx_hash, log_index);
 
 CREATE TABLE IF NOT EXISTS dev_traces (
   trace_uid String,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS dev_traces (
   INDEX idx_dev_traces_from from_addr TYPE bloom_filter GRANULARITY 2,
   INDEX idx_dev_traces_to to_addr TYPE bloom_filter GRANULARITY 2,
   INDEX idx_dev_traces_block block_number TYPE minmax GRANULARITY 1
-) ENGINE = MergeTree ORDER BY (trace_uid);
+) ENGINE = MergeTree ORDER BY (tx_hash, trace_id);
 
 CREATE TABLE IF NOT EXISTS dev_transactions (
   tx_hash String,
@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS dev_token_transfers (
   to_addr String,
   amount_raw String,
   token_id String,
+  batch_ordinal UInt16 DEFAULT 0,
   standard String,
   block_number UInt64,
   ts_millis Int64,
@@ -59,7 +60,7 @@ CREATE TABLE IF NOT EXISTS dev_token_transfers (
   INDEX idx_dev_xfer_from from_addr TYPE bloom_filter GRANULARITY 2,
   INDEX idx_dev_xfer_to to_addr TYPE bloom_filter GRANULARITY 2,
   INDEX idx_dev_xfer_block block_number TYPE minmax GRANULARITY 1
-) ENGINE = MergeTree ORDER BY (event_uid);
+) ENGINE = MergeTree ORDER BY (tx_hash, log_index, token_id, batch_ordinal);
 
 CREATE TABLE IF NOT EXISTS dev_approvals (
   event_uid String,
@@ -78,7 +79,7 @@ CREATE TABLE IF NOT EXISTS dev_approvals (
   INDEX idx_dev_appr_owner owner TYPE bloom_filter GRANULARITY 2,
   INDEX idx_dev_appr_spender spender TYPE bloom_filter GRANULARITY 2,
   INDEX idx_dev_appr_block block_number TYPE minmax GRANULARITY 1
-) ENGINE = MergeTree ORDER BY (event_uid);
+) ENGINE = MergeTree ORDER BY (tx_hash, log_index);
 
 -- Schema version tracking (dev)
 CREATE TABLE IF NOT EXISTS schema_version (

@@ -23,22 +23,20 @@ We need consistent, idempotent ingestion that:
 - Use N confirmations (default 12). Only advance `last_synced_block` when `current_head - N >= block`.
 - Always re-process the rolling reorg window (last N blocks) on each delta cycle; re-insert rows idempotently.
 
-2) Stable logical IDs for deduplication
+2) Logical keys with versioned replacement
 
-- Introduce surrogate IDs computed from logical keys:
-  - `event_uid`: `String` composed as `<tx_hash>:<log_index>` for logs (token transfers, approvals).
-  - `trace_uid`: `String` composed as `<tx_hash>:<trace_id>` for internal traces.
-  - External transactions use `tx_hash` as the natural key; set `is_internal=0`.
-- Store `ingested_at` (`DateTime64(3) UTC`) as the ReplacingMergeTree `version` column.
-- Adjust ClickHouse ORDER BY to start with the surrogate key to enable replacement independent of timestamps, e.g.:
-  - `token_transfers`: `ORDER BY (event_uid)` (optionally followed by secondary sort columns for locality),
-  - `approvals`: `ORDER BY (event_uid)`,
-  - `transactions`: `ORDER BY (tx_hash, is_internal, trace_uid)`.
+- Deduplicate using the natural composite keys surfaced by Ethereum data:
+  - `(tx_hash, log_index, batch_ordinal)` for `token_transfers` to retain ERC-1155 batch ordinals.
+  - `(tx_hash, log_index)` across `logs` and `approvals`.
+  - `(tx_hash, trace_id)` for `traces`.
+  - `transactions` continue to rely on `(tx_hash, is_internal, ifNull(trace_id, ''))` so external rows coexist with normalized internal traces.
+- Keep `ingested_at` (`DateTime64(3) UTC`) as the ReplacingMergeTree `version` column so the latest retry/reorg write wins without deletes.
+- Retain `event_uid` / `trace_uid` columns for debugging and parity with historical exports, but they no longer drive primary sorting keys.
 
 3) Insert semantics
 
-- Never delete; always append. On reorgs/retries, insert the same surrogate key with a higher `ingested_at` value; ReplacingMergeTree keeps the latest.
-- Within-batch dedup: the ingester ensures uniqueness per batch on the surrogate keys to avoid needless duplicates.
+- Never delete; always append. On reorgs/retries, insert the same logical key with a higher `ingested_at`; ReplacingMergeTree keeps the latest row.
+- Accept duplicates inside a single fetch batch. ClickHouse performs replacement during merges, which keeps ingestion code simple and resilient to provider quirks.
 
 4) Query semantics
 
@@ -47,7 +45,7 @@ We need consistent, idempotent ingestion that:
 
 ## Rationale
 
-- Surrogate IDs decouple dedup from variable columns (like timestamps) so replacements are reliable even across reorgs.
+- Natural keys derived from on-chain identifiers keep replacements reliable even across reorgs while staying human-auditable.
 - `ingested_at` provides strict monotonicity across retries and reorg updates (“last write wins”).
 - Append-only and replacement semantics fit ClickHouse strengths while keeping operational complexity low.
 
@@ -56,18 +54,18 @@ We need consistent, idempotent ingestion that:
 Positive:
 
 - Idempotent ingestion without deletions; reorg-safe updates naturally override prior rows.
-- Simple ingester logic: compute UIDs, batch-dedup, append writes.
+- Simple ingester logic: compute UIDs for traceability, append writes, and rely on ClickHouse merges for deduplication.
 
 Negative / Mitigations:
 
 - `FINAL` can be expensive on large tables. Mitigate by using materialized views for API-facing aggregates and scheduling periodic `OPTIMIZE ... FINAL` during off-peak.
-- Surrogate IDs add storage cost; acceptable for MVP. Hash-based UIDs can be introduced later if needed.
+- Replacements take effect after background merges. Provide explicit maintenance queries (`sql/queries/maintenance/replacing_merge_tree_cleanup.sql`) for operators that need deterministic cleanup windows.
 
 ## Implementation Notes
 
-- Add columns: `event_uid` (String), `trace_uid` (String), `ingested_at` (DateTime64(3) UTC) to relevant tables.
-- Update `sql/schema.sql` to place surrogate IDs first in `ORDER BY`, with `ReplacingMergeTree(ingested_at)`.
-- Update the ingester to compute UIDs and perform within-batch dedup.
+- Ensure canonical tables include `ingested_at` (DateTime64(3) UTC) as the ReplacingMergeTree version column and natural-key ORDER BY clauses (with `batch_ordinal=0` signaling non-batch transfers).
+- Keep `event_uid` / `trace_uid` populated in normalization helpers for traceability, but do not rely on them for deduplication.
+- Provide operators with `sql/queries/maintenance/replacing_merge_tree_cleanup.sql` showing the `OPTIMIZE ... FINAL` cadence per table, including duplicate checks on the new batch ordinal.
 - Keep N configurable via `SYNC_CONFIRMATIONS` (default 12).
 
 ## References

@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS token_transfers (
   to_addr String,
   amount_raw String,
   token_id String,
+  batch_ordinal UInt16 DEFAULT 0,
   standard LowCardinality(String),
   block_number UInt64,
   ts DateTime64(3, 'UTC'),
@@ -78,7 +79,7 @@ CREATE TABLE IF NOT EXISTS token_transfers (
   CONSTRAINT token_transfers_from_chk CHECK match(from_addr, '^0x[0-9a-fA-F]{40}$'),
   CONSTRAINT token_transfers_to_chk CHECK match(to_addr, '^0x[0-9a-fA-F]{40}$')
 ) ENGINE = ReplacingMergeTree(ingested_at)
-ORDER BY (tx_hash, log_index, token_id)
+ORDER BY (tx_hash, log_index, token_id, batch_ordinal)
 SETTINGS index_granularity = 4096;
 
 CREATE TABLE IF NOT EXISTS approvals (

@@ -26,7 +26,7 @@ Environment
 - Other: `ETH_PROVIDER_URL`, `SYNC_CONFIRMATIONS`, `BATCH_BLOCKS`, `RATE_LIMIT`, `HTTP_RETRIES`, `HTTP_BACKOFF_BASE`.
 
 Schema targets
-- canonical (default): tables `logs`, `traces`, `token_transfers`, `approvals` as defined in `sql/schema.sql` (ReplacingMergeTree, UTC DateTime64(3), dedup keys).
+- canonical (default): tables `logs`, `traces`, `token_transfers`, `approvals` as defined in `sql/schema.sql` (ReplacingMergeTree, UTC DateTime64(3), logical keys `(tx_hash, log_index, batch_ordinal)` / `(tx_hash, trace_id)` for dedup; `batch_ordinal=0` denotes non-batch transfers).
 - dev: lightweight preview tables `dev_logs`, `dev_traces`, `dev_token_transfers`, `dev_approvals` from `sql/schema_dev.sql`.
 
 Examples
