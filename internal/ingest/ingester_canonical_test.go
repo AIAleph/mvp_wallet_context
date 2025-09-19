@@ -554,3 +554,18 @@ func TestProcessRange_CanonicalContractsFromTrace(t *testing.T) {
 		t.Fatalf("unexpected is_contract %v", row["is_contract"])
 	}
 }
+
+func TestProcessRange_CanonicalContractsInsertError(t *testing.T) {
+	const addr = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	ing := NewWithProvider(addr, Options{Schema: "canonical", ClickHouseDSN: "http://localhost:8123/db"}, provCanonContractTx{})
+	ing.ch.SetTransport(rtFunc(func(r *http.Request) (*http.Response, error) {
+		q := r.URL.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO contracts") {
+			return &http.Response{StatusCode: 500, Body: ioNopCloser("boom")}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing.processRange(context.Background(), 1, 1); err == nil || !strings.Contains(err.Error(), "inserting contracts") {
+		t.Fatalf("expected contracts insert error, got %v", err)
+	}
+}
