@@ -1,0 +1,210 @@
+{
+  "logs": [
+    {
+      "tx_hash": "0xaaa0000000000000000000000000000000000000000000000000000000000001",
+      "log_index": 0,
+      "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "topics": [
+        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+        "0x0000000000000000000000001111111111111111111111111111111111111111",
+        "0x0000000000000000000000002222222222222222222222222222222222222222"
+      ],
+      "data": "0x00000000000000000000000000000000000000000000000000000000000001f4",
+      "block_number": 17000000,
+      "ts_millis": 1712345678000
+    },
+    {
+      "tx_hash": "0xbbb0000000000000000000000000000000000000000000000000000000000002",
+      "log_index": 1,
+      "address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "topics": [
+        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+        "0x0000000000000000000000003333333333333333333333333333333333333333",
+        "0x0000000000000000000000004444444444444444444444444444444444444444",
+        "0x000000000000000000000000000000000000000000000000000000000000004d"
+      ],
+      "data": "0x",
+      "block_number": 17000000,
+      "ts_millis": 1712345679000
+    },
+    {
+      "tx_hash": "0xccc0000000000000000000000000000000000000000000000000000000000003",
+      "log_index": 2,
+      "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "topics": [
+        "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925",
+        "0x0000000000000000000000005555555555555555555555555555555555555555",
+        "0x0000000000000000000000006666666666666666666666666666666666666666"
+      ],
+      "data": "0x00000000000000000000000000000000000000000000000000000000000f423f",
+      "block_number": 17000001,
+      "ts_millis": 1712345680000
+    },
+    {
+      "tx_hash": "0xddd0000000000000000000000000000000000000000000000000000000000004",
+      "log_index": 3,
+      "address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "topics": [
+        "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925",
+        "0x0000000000000000000000007777777777777777777777777777777777777777",
+        "0x0000000000000000000000008888888888888888888888888888888888888888",
+        "0x000000000000000000000000000000000000000000000000000000000000002a"
+      ],
+      "data": "0x",
+      "block_number": 17000001,
+      "ts_millis": 1712345681000
+    },
+    {
+      "tx_hash": "0xeee0000000000000000000000000000000000000000000000000000000000005",
+      "log_index": 4,
+      "address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "topics": [
+        "0x17307eab39ab6107e8899845ad3d59bd9653f200f220920489ca2b5937696c31",
+        "0x0000000000000000000000007777777777777777777777777777777777777777",
+        "0x0000000000000000000000009999999999999999999999999999999999999999"
+      ],
+      "data": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "block_number": 17000001,
+      "ts_millis": 1712345682000
+    },
+    {
+      "tx_hash": "0xfff0000000000000000000000000000000000000000000000000000000000006",
+      "log_index": 5,
+      "address": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "topics": [
+        "0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62",
+        "0x000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0x000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "0x000000000000000000000000cccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "data": "0x00000000000000000000000000000000000000000000000000000000000001f50000000000000000000000000000000000000000000000000000000000000003",
+      "block_number": 17000002,
+      "ts_millis": 1712345683000
+    },
+    {
+      "tx_hash": "0x1110000000000000000000000000000000000000000000000000000000000007",
+      "log_index": 6,
+      "address": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "topics": [
+        "0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb",
+        "0x000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0x000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "0x000000000000000000000000dddddddddddddddddddddddddddddddddddddddd"
+      ],
+      "data": "0x000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000001b590000000000000000000000000000000000000000000000000000000000001b5a0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000b000000000000000000000000000000000000000000000000000000000000000c",
+      "block_number": 17000002,
+      "ts_millis": 1712345684000
+    }
+  ],
+  "transfers": [
+    {
+      "event_uid": "0xaaa0000000000000000000000000000000000000000000000000000000000001:0",
+      "tx_hash": "0xaaa0000000000000000000000000000000000000000000000000000000000001",
+      "log_index": 0,
+      "token": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "from_addr": "0x1111111111111111111111111111111111111111",
+      "to_addr": "0x2222222222222222222222222222222222222222",
+      "amount_raw": "500",
+      "token_id": "",
+      "standard": "erc20",
+      "block_number": 17000000,
+      "ts_millis": 1712345678000
+    },
+    {
+      "event_uid": "0xbbb0000000000000000000000000000000000000000000000000000000000002:1",
+      "tx_hash": "0xbbb0000000000000000000000000000000000000000000000000000000000002",
+      "log_index": 1,
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "from_addr": "0x3333333333333333333333333333333333333333",
+      "to_addr": "0x4444444444444444444444444444444444444444",
+      "amount_raw": "1",
+      "token_id": "77",
+      "standard": "erc721",
+      "block_number": 17000000,
+      "ts_millis": 1712345679000
+    },
+    {
+      "event_uid": "0xfff0000000000000000000000000000000000000000000000000000000000006:5",
+      "tx_hash": "0xfff0000000000000000000000000000000000000000000000000000000000006",
+      "log_index": 5,
+      "token": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "from_addr": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "to_addr": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "amount_raw": "3",
+      "token_id": "501",
+      "standard": "erc1155",
+      "block_number": 17000002,
+      "ts_millis": 1712345683000
+    },
+    {
+      "event_uid": "0x1110000000000000000000000000000000000000000000000000000000000007:6:0",
+      "tx_hash": "0x1110000000000000000000000000000000000000000000000000000000000007",
+      "log_index": 6,
+      "token": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "from_addr": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "to_addr": "0xdddddddddddddddddddddddddddddddddddddddd",
+      "amount_raw": "11",
+      "token_id": "7001",
+      "standard": "erc1155",
+      "block_number": 17000002,
+      "ts_millis": 1712345684000
+    },
+    {
+      "event_uid": "0x1110000000000000000000000000000000000000000000000000000000000007:6:1",
+      "tx_hash": "0x1110000000000000000000000000000000000000000000000000000000000007",
+      "log_index": 6,
+      "token": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "from_addr": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "to_addr": "0xdddddddddddddddddddddddddddddddddddddddd",
+      "amount_raw": "12",
+      "token_id": "7002",
+      "standard": "erc1155",
+      "block_number": 17000002,
+      "ts_millis": 1712345684000
+    }
+  ],
+  "approvals": [
+    {
+      "event_uid": "0xccc0000000000000000000000000000000000000000000000000000000000003:2",
+      "tx_hash": "0xccc0000000000000000000000000000000000000000000000000000000000003",
+      "log_index": 2,
+      "token": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": "0x5555555555555555555555555555555555555555",
+      "spender": "0x6666666666666666666666666666666666666666",
+      "amount_raw": "999999",
+      "token_id": "",
+      "is_approval_for_all": 0,
+      "standard": "erc20",
+      "block_number": 17000001,
+      "ts_millis": 1712345680000
+    },
+    {
+      "event_uid": "0xddd0000000000000000000000000000000000000000000000000000000000004:3",
+      "tx_hash": "0xddd0000000000000000000000000000000000000000000000000000000000004",
+      "log_index": 3,
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "owner": "0x7777777777777777777777777777777777777777",
+      "spender": "0x8888888888888888888888888888888888888888",
+      "amount_raw": "1",
+      "token_id": "42",
+      "is_approval_for_all": 0,
+      "standard": "erc721",
+      "block_number": 17000001,
+      "ts_millis": 1712345681000
+    },
+    {
+      "event_uid": "0xeee0000000000000000000000000000000000000000000000000000000000005:4",
+      "tx_hash": "0xeee0000000000000000000000000000000000000000000000000000000000005",
+      "log_index": 4,
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "owner": "0x7777777777777777777777777777777777777777",
+      "spender": "0x9999999999999999999999999999999999999999",
+      "amount_raw": "0",
+      "token_id": "",
+      "is_approval_for_all": 1,
+      "standard": "erc721",
+      "block_number": 17000001,
+      "ts_millis": 1712345682000
+    }
+  ]
+}
