@@ -99,7 +99,7 @@ testdata/             Recorded-fixture guidance plus (eventual) provider capture
 
 - Go config loader (`internal/config`) clamps ranges and builds sanitized DSNs; it refuses inline credentials passed via `--clickhouse` flag to avoid accidental leaks.
 - Provider wiring (`internal/eth/factory.go`) applies rate limiting and retry/backoff defaults; extend with host-specific adapters as needed.
-- ClickHouse schema uses ReplacingMergeTree with `ingested_at` or `updated_at` version columns; surrogate keys (`event_uid`, `trace_uid`) should lead ORDER BY clauses per ADR-0002 (pending schema update).
+- ClickHouse schema uses ReplacingMergeTree with `ingested_at` or `updated_at` version columns; ORDER BY clauses lead with natural keys (e.g., `(tx_hash, log_index, batch_ordinal)` for ERC-1155 batches) so replacements rely on canonical Ethereum identifiers.
 
 ## Observability
 

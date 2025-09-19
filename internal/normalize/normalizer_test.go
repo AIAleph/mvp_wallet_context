@@ -57,6 +57,9 @@ func TestDecodeERC1155BatchGolden(t *testing.T) {
 	if transfers[0].Standard != "erc1155" || transfers[1].Standard != "erc1155" {
 		t.Fatalf("unexpected standard: %s, %s", transfers[0].Standard, transfers[1].Standard)
 	}
+	if transfers[0].BatchOrd != 0 || transfers[1].BatchOrd != 1 {
+		t.Fatalf("unexpected batch ordinals: %d, %d", transfers[0].BatchOrd, transfers[1].BatchOrd)
+	}
 }
 
 func TestAddrFromTopicVariants(t *testing.T) {

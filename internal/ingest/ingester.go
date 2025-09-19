@@ -341,6 +341,7 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 				"to_addr":      r.To,
 				"amount_raw":   r.AmountRaw,
 				"token_id":     r.TokenID,
+				"batch_ordinal": r.BatchOrd,
 				"standard":     r.Standard,
 				"block_number": r.BlockNum,
 				"ts":           fmtDT64(r.TsMillis),

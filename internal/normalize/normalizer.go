@@ -173,6 +173,7 @@ type TokenTransferRow struct {
 	To        string `json:"to_addr"`
 	AmountRaw string `json:"amount_raw"`
 	TokenID   string `json:"token_id"`
+	BatchOrd  uint16 `json:"batch_ordinal"`
 	Standard  string `json:"standard"` // erc20|erc721|erc1155
 	BlockNum  uint64 `json:"block_number"`
 	TsMillis  int64  `json:"ts_millis"`
@@ -216,6 +217,7 @@ func DecodeTokenEvents(logs []eth.Log) (transfers []TokenTransferRow, approvals 
 			// ERC20: topics[1]=from, topics[2]=to, data=amount
 			// ERC721: topics[1]=from, topics[2]=to, topics[3]=tokenId, data empty
 			var amountRaw, tokenID, standard string
+			batchOrd := uint16(0)
 			if len(l.Topics) >= 3 && len(l.DataHex) >= 2 {
 				amountRaw = hexToBigIntString(l.DataHex)
 				tokenID = ""
@@ -235,6 +237,7 @@ func DecodeTokenEvents(logs []eth.Log) (transfers []TokenTransferRow, approvals 
 				To:        addrFromTopic(l.Topics, 2),
 				AmountRaw: amountRaw,
 				TokenID:   tokenID,
+				BatchOrd:  batchOrd,
 				Standard:  standard,
 				BlockNum:  l.BlockNum,
 				TsMillis:  l.TsMillis,
@@ -304,6 +307,7 @@ func DecodeTokenEvents(logs []eth.Log) (transfers []TokenTransferRow, approvals 
 				To:        addrFromTopic(l.Topics, 3),
 				AmountRaw: val,
 				TokenID:   id,
+				BatchOrd:  0,
 				Standard:  "erc1155",
 				BlockNum:  l.BlockNum,
 				TsMillis:  l.TsMillis,
@@ -324,6 +328,7 @@ func DecodeTokenEvents(logs []eth.Log) (transfers []TokenTransferRow, approvals 
 					To:        addrFromTopic(l.Topics, 3),
 					AmountRaw: vals[k],
 					TokenID:   ids[k],
+					BatchOrd:  uint16(k),
 					Standard:  "erc1155",
 					BlockNum:  l.BlockNum,
 					TsMillis:  l.TsMillis,
