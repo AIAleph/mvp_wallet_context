@@ -28,7 +28,7 @@ func TestDecodeERC1155BatchGolden(t *testing.T) {
 		TxHash:   "0xabc",
 		Index:    3,
 		Address:  "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-		Topics:   []string{"0x4a39dc06", "0x" + strings.Repeat("0", 64), padAddr(from), padAddr(to)},
+		Topics:   []string{topicERC1155BatchFull, "0x" + strings.Repeat("0", 64), padAddr(from), padAddr(to)},
 		DataHex:  data,
 		BlockNum: 16,
 		TsMillis: 100000,
@@ -90,7 +90,7 @@ func TestDecodeERC20AndERC721TransfersAndApprovals(t *testing.T) {
 		TxHash:  "0xaaa",
 		Index:   1,
 		Address: addrToken,
-		Topics:  []string{"0xddf252ad", padAddr(from), padAddr(to)},
+		Topics:  []string{topicTransferFull, padAddr(from), padAddr(to)},
 		DataHex: "0x" + pad32Hex(1234),
 	}
 	// ERC-721 Transfer
@@ -98,7 +98,7 @@ func TestDecodeERC20AndERC721TransfersAndApprovals(t *testing.T) {
 		TxHash:  "0xaab",
 		Index:   2,
 		Address: addrToken,
-		Topics:  []string{"0xddf252ad", padAddr(from), padAddr(to), "0x" + pad32Hex(99)},
+		Topics:  []string{topicTransferFull, padAddr(from), padAddr(to), "0x" + pad32Hex(99)},
 		DataHex: "0x",
 	}
 	// ERC-20 Approval
@@ -106,7 +106,7 @@ func TestDecodeERC20AndERC721TransfersAndApprovals(t *testing.T) {
 		TxHash:  "0xaac",
 		Index:   3,
 		Address: addrToken,
-		Topics:  []string{"0x8c5be1e5", padAddr(from), padAddr(spender)},
+		Topics:  []string{topicApprovalFull, padAddr(from), padAddr(spender)},
 		DataHex: "0x" + pad32Hex(555),
 	}
 	// ERC-721 Approval
@@ -114,7 +114,7 @@ func TestDecodeERC20AndERC721TransfersAndApprovals(t *testing.T) {
 		TxHash:  "0xaad",
 		Index:   4,
 		Address: addrToken,
-		Topics:  []string{"0x8c5be1e5", padAddr(from), padAddr(spender), "0x" + pad32Hex(42)},
+		Topics:  []string{topicApprovalFull, padAddr(from), padAddr(spender), "0x" + pad32Hex(42)},
 		DataHex: "0x",
 	}
 	// ApprovalForAll true
@@ -122,7 +122,7 @@ func TestDecodeERC20AndERC721TransfersAndApprovals(t *testing.T) {
 		TxHash:  "0xaae",
 		Index:   5,
 		Address: addrToken,
-		Topics:  []string{"0x17307eab", padAddr(from), padAddr(spender)},
+		Topics:  []string{topicApprovalForAllFull, padAddr(from), padAddr(spender)},
 		DataHex: "0x" + strings.Repeat("0", 63) + "1",
 	}
 
@@ -163,6 +163,11 @@ func TestDecodeInputMethod(t *testing.T) {
 		"0x23b872ddabcd": "transferFrom",
 		"0xabcdef012345": "0xabcdef01",
 		"0x00000000abcd": "",
+		"0xb88d4fde0000": "safeTransferFrom",
+		"0x2eb2c2d60000": "safeBatchTransferFrom",
+		"0xa22cb4650000": "setApprovalForAll",
+		"0x70a082310000": "balanceOf",
+		"0x40c10f190000": "mint",
 	}
 	for input, want := range cases {
 		if got := DecodeInputMethod(input); got != want {

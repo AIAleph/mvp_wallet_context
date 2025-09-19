@@ -255,6 +255,9 @@ func isRetriable(err error) bool {
 func doWithRetry(ctx context.Context, fn func() error) error {
 	var err error
 	for attempt := 0; attempt < retryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err = fn(); err == nil {
 			return nil
 		}

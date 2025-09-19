@@ -86,17 +86,6 @@ func TracesToRows(in []eth.Trace) []TraceRow {
 	return out
 }
 
-var selectorNames = map[string]string{
-	"0xa9059cbb": "transfer",
-	"0x095ea7b3": "approve",
-	"0x23b872dd": "transferFrom",
-	"0x42842e0e": "safeTransferFrom",
-	"0x40c10f19": "mint",
-	"0x4e71d92d": "claim",
-	"0x0181b8ae": "deposit",
-	"0x2e1a7d4d": "withdraw",
-}
-
 // DecodeInputMethod maps calldata selectors to short method labels. Unknown
 // selectors return the 4-byte hex prefix, empty/short inputs return "".
 func DecodeInputMethod(input string) string {
@@ -204,14 +193,6 @@ type ApprovalRow struct {
 	TsMillis  int64  `json:"ts_millis"`
 }
 
-const (
-	topicTransferPrefix       = "0xddf252ad" // Transfer(address,address,uint256)
-	topicApprovalPrefix       = "0x8c5be1e5" // Approval(address,address,uint256)
-	topicApprovalForAllPrefix = "0x17307eab" // ApprovalForAll(address,address,bool)
-	topicERC1155SinglePrefix  = "0xc3d58168" // TransferSingle(address,address,address,uint256,uint256)
-	topicERC1155BatchPrefix   = "0x4a39dc06" // TransferBatch(address,address,address,uint256[],uint256[])
-)
-
 func hexToBigIntString(s string) string {
 	s = strings.TrimPrefix(s, "0x")
 	if s == "" {
@@ -230,7 +211,7 @@ func DecodeTokenEvents(logs []eth.Log) (transfers []TokenTransferRow, approvals 
 		}
 		t0 := strings.ToLower(l.Topics[0])
 		switch {
-		case strings.HasPrefix(t0, topicTransferPrefix):
+		case topicMatches(t0, topicTransferFull):
 			// ERC20 vs ERC721 heuristic
 			// ERC20: topics[1]=from, topics[2]=to, data=amount
 			// ERC721: topics[1]=from, topics[2]=to, topics[3]=tokenId, data empty
@@ -258,7 +239,7 @@ func DecodeTokenEvents(logs []eth.Log) (transfers []TokenTransferRow, approvals 
 				BlockNum:  l.BlockNum,
 				TsMillis:  l.TsMillis,
 			})
-		case strings.HasPrefix(t0, topicApprovalPrefix):
+		case topicMatches(t0, topicApprovalFull):
 			// ERC20: topics[1]=owner, topics[2]=spender, data=amount
 			// ERC721: topics[1]=owner, topics[2]=approved, topics[3]=tokenId, data empty
 			var amt, tokenID, standard string
@@ -286,7 +267,7 @@ func DecodeTokenEvents(logs []eth.Log) (transfers []TokenTransferRow, approvals 
 				BlockNum:  l.BlockNum,
 				TsMillis:  l.TsMillis,
 			})
-		case strings.HasPrefix(t0, topicApprovalForAllPrefix):
+		case topicMatches(t0, topicApprovalForAllFull):
 			// owner, operator in topics; data is bool
 			isForAll := uint8(0)
 			if strings.HasSuffix(strings.ToLower(l.DataHex), strings.Repeat("0", 63)+"1") {
@@ -306,7 +287,7 @@ func DecodeTokenEvents(logs []eth.Log) (transfers []TokenTransferRow, approvals 
 				BlockNum:  l.BlockNum,
 				TsMillis:  l.TsMillis,
 			})
-		case strings.HasPrefix(t0, topicERC1155SinglePrefix):
+		case topicMatches(t0, topicERC1155SingleFull):
 			// topics: [sig, operator, from, to]; data: id, value
 			fields := splitDataWords(l.DataHex)
 			var id, val string
@@ -327,7 +308,7 @@ func DecodeTokenEvents(logs []eth.Log) (transfers []TokenTransferRow, approvals 
 				BlockNum:  l.BlockNum,
 				TsMillis:  l.TsMillis,
 			})
-		case strings.HasPrefix(t0, topicERC1155BatchPrefix):
+		case topicMatches(t0, topicERC1155BatchFull):
 			ids, vals := parseERC1155Batch(l.DataHex)
 			n := len(ids)
 			if len(vals) < n {
@@ -351,6 +332,21 @@ func DecodeTokenEvents(logs []eth.Log) (transfers []TokenTransferRow, approvals 
 		}
 	}
 	return
+}
+
+func topicMatches(topic, full string) bool {
+	if full == "" {
+		return false
+	}
+	topic = strings.ToLower(topic)
+	full = strings.ToLower(full)
+	if topic == full {
+		return true
+	}
+	if len(topic) >= 10 && len(full) >= 10 && strings.HasPrefix(topic, full[:10]) {
+		return true
+	}
+	return false
 }
 
 func addrFromTopic(topics []string, idx int) string {
