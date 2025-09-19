@@ -131,22 +131,34 @@ func TestProcessRange_CanonicalTransactionsRow(t *testing.T) {
 	if payload == "" {
 		t.Fatal("expected transactions insert payload")
 	}
-	var row struct {
+	type txRow struct {
 		InputMethod string `json:"input_method"`
 		ValueRaw    string `json:"value_raw"`
 		IsInternal  uint8  `json:"is_internal"`
 	}
-	if err := json.Unmarshal([]byte(payload), &row); err != nil {
-		t.Fatalf("decode insert: %v", err)
+	var external *txRow
+	for _, line := range strings.Split(strings.TrimSpace(payload), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var candidate txRow
+		if err := json.Unmarshal([]byte(line), &candidate); err != nil {
+			t.Fatalf("decode insert: %v", err)
+		}
+		if candidate.IsInternal == 0 {
+			external = &candidate
+			break
+		}
 	}
-	if row.InputMethod != "transfer" {
-		t.Fatalf("input_method=%s", row.InputMethod)
+	if external == nil {
+		t.Fatal("expected external transaction row")
 	}
-	if row.ValueRaw != "1" {
-		t.Fatalf("value_raw=%s", row.ValueRaw)
+	if external.InputMethod != "transfer" {
+		t.Fatalf("input_method=%s", external.InputMethod)
 	}
-	if row.IsInternal != 0 {
-		t.Fatalf("expected external transaction, got %d", row.IsInternal)
+	if external.ValueRaw != "1" {
+		t.Fatalf("value_raw=%s", external.ValueRaw)
 	}
 }
 
@@ -203,6 +215,106 @@ func TestProcessRange_CanonicalTransactionTraceID(t *testing.T) {
 	}
 	if row.TraceID != "trace-1" {
 		t.Fatalf("expected trace_id trace-1, got %s", row.TraceID)
+	}
+}
+
+type provCanonInternalOnly struct{}
+
+func (provCanonInternalOnly) BlockNumber(ctx context.Context) (uint64, error) { return 1, nil }
+func (provCanonInternalOnly) BlockTimestamp(ctx context.Context, block uint64) (int64, error) {
+	return 2_000, nil
+}
+func (provCanonInternalOnly) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
+	return []eth.Trace{{
+		TxHash:   "0xABCDEF",
+		TraceID:  "0-1",
+		From:     address,
+		To:       "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		ValueWei: "0x5",
+		BlockNum: from,
+		TsMillis: 0,
+	}}, nil
+}
+func (provCanonInternalOnly) GetLogs(ctx context.Context, address string, from, to uint64, topics [][]string) ([]eth.Log, error) {
+	return nil, nil
+}
+func (provCanonInternalOnly) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return nil, nil
+}
+
+func TestProcessRange_CanonicalInternalTraceTransactions(t *testing.T) {
+	const addr = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	ing := NewWithProvider(addr, Options{Schema: "canonical", ClickHouseDSN: "http://localhost:8123/db"}, provCanonInternalOnly{})
+	var rows []map[string]any
+	ing.ch.SetTransport(rtFunc(func(r *http.Request) (*http.Response, error) {
+		q := r.URL.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO transactions") {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			payload := strings.TrimSpace(string(body))
+			for _, line := range strings.Split(payload, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				var m map[string]any
+				if err := json.Unmarshal([]byte(line), &m); err != nil {
+					t.Fatalf("decode insert: %v", err)
+				}
+				rows = append(rows, m)
+			}
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing.processRange(context.Background(), 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 transaction row, got %d", len(rows))
+	}
+	row := rows[0]
+	if isInternal, ok := row["is_internal"].(float64); !ok || isInternal != 1 {
+		t.Fatalf("expected is_internal 1, got %v", row["is_internal"])
+	}
+	traceID, ok := row["trace_id"].(string)
+	if !ok || traceID != "0-1" {
+		t.Fatalf("expected trace_id 0-1, got %v", row["trace_id"])
+	}
+	if txHash, ok := row["tx_hash"].(string); !ok || txHash != strings.ToLower("0xABCDEF") {
+		t.Fatalf("unexpected tx_hash %v", row["tx_hash"])
+	}
+}
+
+func TestNormalizeInternalTracesForAddress(t *testing.T) {
+	traces := []eth.Trace{
+		{TxHash: "0x1", TraceID: "root", From: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", To: "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", ValueWei: "0x1", BlockNum: 10, TsMillis: 1_000},
+		{TxHash: "0x2", TraceID: "0-1", From: "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", To: "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", ValueWei: "0x2", BlockNum: 11, TsMillis: 2_000},
+	}
+	rows := normalizeInternalTracesForAddress(traces, "")
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row without filter, got %d", len(rows))
+	}
+	row := rows[0]
+	if row.IsInternal != 1 {
+		t.Fatalf("expected is_internal flag set, got %d", row.IsInternal)
+	}
+	if row.TraceID == "root" {
+		t.Fatalf("expected non-root trace, got %s", row.TraceID)
+	}
+	target := "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+	filtered := normalizeInternalTracesForAddress(traces, target)
+	if len(filtered) != 0 {
+		t.Fatalf("expected 0 rows after filtering root trace, got %d", len(filtered))
+	}
+	otherTarget := "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+	filtered = normalizeInternalTracesForAddress(traces, otherTarget)
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 row for non-root trace, got %d", len(filtered))
+	}
+	if filtered[0].TraceID != "0-1" {
+		t.Fatalf("unexpected trace id %s", filtered[0].TraceID)
 	}
 }
 

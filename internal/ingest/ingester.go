@@ -303,6 +303,10 @@ func (i *Ingester) processRange(ctx context.Context, from, to uint64) error {
 	// Normalize and write according to schema mode
 	mode := i.SchemaMode()
 	txRows := normalizeTransactionsForAddress(txs, i.address)
+	internalTxRows := normalizeInternalTracesForAddress(traces, i.address)
+	if len(internalTxRows) > 0 {
+		txRows = append(txRows, internalTxRows...)
+	}
 	if mode == "canonical" {
 		// Logs
 		lrows := normalize.LogsToRows(logs)
@@ -447,6 +451,40 @@ func normalizeTransactionsForAddress(txs []eth.Transaction, target string) []nor
 		return nil
 	}
 	rows := normalize.TransactionsToRows(txs, false)
+	if target == "" || len(rows) == 0 {
+		return rows
+	}
+	addr := strings.ToLower(target)
+	filtered := rows[:0]
+	for _, row := range rows {
+		if row.From == addr || row.To == addr {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
+}
+
+func normalizeInternalTracesForAddress(traces []eth.Trace, target string) []normalize.TransactionRow {
+	if len(traces) == 0 {
+		return nil
+	}
+	txs := make([]eth.Transaction, 0, len(traces))
+	for _, tr := range traces {
+		if tr.TraceID == "root" {
+			continue
+		}
+		txs = append(txs, eth.Transaction{
+			Hash:     tr.TxHash,
+			From:     tr.From,
+			To:       tr.To,
+			ValueWei: tr.ValueWei,
+			BlockNum: tr.BlockNum,
+			TsMillis: tr.TsMillis,
+			Status:   1,
+			TraceID:  tr.TraceID,
+		})
+	}
+	rows := normalize.TransactionsToRows(txs, true)
 	if target == "" || len(rows) == 0 {
 		return rows
 	}
