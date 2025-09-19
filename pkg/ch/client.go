@@ -253,11 +253,11 @@ func isRetriable(err error) bool {
 }
 
 func doWithRetry(ctx context.Context, fn func() error) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	var err error
 	for attempt := 0; attempt < retryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err = fn(); err == nil {
 			return nil
 		}
@@ -272,9 +272,6 @@ func doWithRetry(ctx context.Context, fn func() error) error {
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-		}
-		if err := ctx.Err(); err != nil {
-			return err
 		}
 	}
 	return err
