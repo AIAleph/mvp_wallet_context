@@ -81,4 +81,41 @@ func TestBackfillDeltaAndTsCache(t *testing.T) {
 	if err := ing.Delta(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if p.tsCalls <= callsAfterBackfill {
+		t.Fatalf("expected timestamp cache eviction; calls=%d after delta (was %d)", p.tsCalls, callsAfterBackfill)
+	}
+}
+
+func TestPruneTimestampCacheResetsFromGenesis(t *testing.T) {
+	ing := New("0xabc", Options{})
+	ing.tsCache[10] = 1000
+	ing.tsCache[20] = 2000
+	ing.pruneTimestampCache(0)
+	if l := len(ing.tsCache); l != 0 {
+		t.Fatalf("expected cleared cache, got %d entries", l)
+	}
+
+	// Second call exercises the empty-cache path while locked.
+	ing.pruneTimestampCache(0)
+	if l := len(ing.tsCache); l != 0 {
+		t.Fatalf("expected cache to remain empty, got %d entries", l)
+	}
+}
+
+func TestPruneTimestampCacheTrimsRollingWindow(t *testing.T) {
+	ing := New("0xabc", Options{})
+	ing.tsCache[5] = 500
+	ing.tsCache[12] = 1200
+	ing.tsCache[18] = 1800
+	ing.pruneTimestampCache(12)
+
+	if _, ok := ing.tsCache[5]; !ok {
+		t.Fatal("expected block 5 to remain cached")
+	}
+	if _, ok := ing.tsCache[12]; ok {
+		t.Fatal("expected block 12 to be pruned")
+	}
+	if _, ok := ing.tsCache[18]; ok {
+		t.Fatal("expected block 18 to be pruned")
+	}
 }

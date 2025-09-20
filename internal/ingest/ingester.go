@@ -217,6 +217,9 @@ func (i *Ingester) Delta(ctx context.Context) error {
 		}
 		from = ckpt.LastSyncedBlock + 1
 	}
+	if i.opts.Confirmations > 0 {
+		i.pruneTimestampCache(from)
+	}
 	if from > to {
 		if existed {
 			return i.persistCheckpoint(ctx, ckpt, checkpointDelta, ckpt.LastSyncedBlock)
@@ -612,6 +615,28 @@ func (i *Ingester) getBlockTs(ctx context.Context, block uint64) (int64, bool) {
 	i.tsCache[block] = ts
 	i.tsMu.Unlock()
 	return ts, true
+}
+
+// pruneTimestampCache removes cached timestamps for blocks at or beyond the
+// supplied lower bound. Reorg handling replays the last N blocks, so clearing
+// cached timestamps in that window ensures we refetch fresh values instead of
+// reusing potentially stale data from the replaced chain head.
+func (i *Ingester) pruneTimestampCache(from uint64) {
+	if from == 0 {
+		i.tsMu.Lock()
+		if len(i.tsCache) > 0 {
+			i.tsCache = make(map[uint64]int64)
+		}
+		i.tsMu.Unlock()
+		return
+	}
+	i.tsMu.Lock()
+	for block := range i.tsCache {
+		if block >= from {
+			delete(i.tsCache, block)
+		}
+	}
+	i.tsMu.Unlock()
 }
 
 // safeHead returns the highest block number that satisfies the configured
