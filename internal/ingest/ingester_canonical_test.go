@@ -98,6 +98,8 @@ func TestProcessRange_CanonicalInsertsSuccess(t *testing.T) {
 			calls["traces"]++
 		case strings.Contains(q, "INSERT INTO transactions"):
 			calls["transactions"]++
+		case strings.Contains(q, "INSERT INTO contracts"):
+			calls["contracts"]++
 		}
 		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
 	}))
@@ -399,5 +401,171 @@ func TestProcessRange_CanonicalTransactionsFilterByAddress(t *testing.T) {
 	}
 	if method, ok := row["input_method"].(string); !ok || method != "approve" {
 		t.Fatalf("expected input_method approve, got %v", row["input_method"])
+	}
+}
+
+type provCanonContractTx struct{}
+
+func (provCanonContractTx) BlockNumber(ctx context.Context) (uint64, error) { return 1, nil }
+func (provCanonContractTx) BlockTimestamp(ctx context.Context, block uint64) (int64, error) {
+	return 1_000, nil
+}
+func (provCanonContractTx) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
+	return nil, nil
+}
+func (provCanonContractTx) GetLogs(ctx context.Context, address string, from, to uint64, topics [][]string) ([]eth.Log, error) {
+	return nil, nil
+}
+func (provCanonContractTx) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return []eth.Transaction{{
+		Hash:            "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		From:            address,
+		To:              "",
+		ValueWei:        "0x0",
+		Status:          1,
+		BlockNum:        from,
+		TsMillis:        1_000,
+		ContractAddress: "0x1234567890abcdef1234567890abcdef12345678",
+	}}, nil
+}
+
+func TestProcessRange_CanonicalContractsFromTransaction(t *testing.T) {
+	const addr = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	var payload string
+	ing := NewWithProvider(addr, Options{Schema: "canonical", ClickHouseDSN: "http://localhost:8123/db"}, provCanonContractTx{})
+	ing.ch.SetTransport(rtFunc(func(r *http.Request) (*http.Response, error) {
+		q := r.URL.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO contracts") {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			payload = strings.TrimSpace(string(body))
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing.processRange(context.Background(), 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if payload == "" {
+		t.Fatal("expected contracts insert payload")
+	}
+	var rows []string
+	for _, line := range strings.Split(payload, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		rows = append(rows, line)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 contracts row, got %d", len(rows))
+	}
+	var row map[string]any
+	if err := json.Unmarshal([]byte(rows[0]), &row); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if got, ok := row["address"].(string); !ok || got != "0x1234567890abcdef1234567890abcdef12345678" {
+		t.Fatalf("unexpected contract address %v", row["address"])
+	}
+	if got, ok := row["created_at_tx"].(string); !ok || got != "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" {
+		t.Fatalf("unexpected created_at_tx %v", row["created_at_tx"])
+	}
+	if got, ok := row["first_seen_block"].(float64); !ok || got != 1 {
+		t.Fatalf("unexpected first_seen_block %v", row["first_seen_block"])
+	}
+	if got, ok := row["is_contract"].(float64); !ok || got != 1 {
+		t.Fatalf("unexpected is_contract %v", row["is_contract"])
+	}
+}
+
+type provCanonContractTrace struct{}
+
+func (provCanonContractTrace) BlockNumber(ctx context.Context) (uint64, error) { return 1, nil }
+func (provCanonContractTrace) BlockTimestamp(ctx context.Context, block uint64) (int64, error) {
+	return 2_000, nil
+}
+func (provCanonContractTrace) TraceBlock(ctx context.Context, from, to uint64, address string) ([]eth.Trace, error) {
+	return []eth.Trace{{
+		TxHash:          "0xbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeef",
+		TraceID:         "0-0",
+		From:            address,
+		To:              "",
+		ValueWei:        "0x0",
+		BlockNum:        from,
+		TsMillis:        2_000,
+		Type:            "create",
+		CreatedContract: "0xcafebabecafebabecafebabecafebabecafebabe",
+	}}, nil
+}
+func (provCanonContractTrace) GetLogs(ctx context.Context, address string, from, to uint64, topics [][]string) ([]eth.Log, error) {
+	return nil, nil
+}
+func (provCanonContractTrace) Transactions(ctx context.Context, address string, from, to uint64) ([]eth.Transaction, error) {
+	return nil, nil
+}
+
+func TestProcessRange_CanonicalContractsFromTrace(t *testing.T) {
+	const addr = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	var payload string
+	ing := NewWithProvider(addr, Options{Schema: "canonical", ClickHouseDSN: "http://localhost:8123/db"}, provCanonContractTrace{})
+	ing.ch.SetTransport(rtFunc(func(r *http.Request) (*http.Response, error) {
+		q := r.URL.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO contracts") {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			payload = strings.TrimSpace(string(body))
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing.processRange(context.Background(), 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if payload == "" {
+		t.Fatal("expected contracts insert payload")
+	}
+	var rows []string
+	for _, line := range strings.Split(payload, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		rows = append(rows, line)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 contracts row, got %d", len(rows))
+	}
+	var row map[string]any
+	if err := json.Unmarshal([]byte(rows[0]), &row); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if got, ok := row["address"].(string); !ok || got != "0xcafebabecafebabecafebabecafebabecafebabe" {
+		t.Fatalf("unexpected contract address %v", row["address"])
+	}
+	if got, ok := row["created_at_tx"].(string); !ok || got != "0xbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeef" {
+		t.Fatalf("unexpected created_at_tx %v", row["created_at_tx"])
+	}
+	if got, ok := row["first_seen_block"].(float64); !ok || got != 1 {
+		t.Fatalf("unexpected first_seen_block %v", row["first_seen_block"])
+	}
+	if got, ok := row["is_contract"].(float64); !ok || got != 1 {
+		t.Fatalf("unexpected is_contract %v", row["is_contract"])
+	}
+}
+
+func TestProcessRange_CanonicalContractsInsertError(t *testing.T) {
+	const addr = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	ing := NewWithProvider(addr, Options{Schema: "canonical", ClickHouseDSN: "http://localhost:8123/db"}, provCanonContractTx{})
+	ing.ch.SetTransport(rtFunc(func(r *http.Request) (*http.Response, error) {
+		q := r.URL.Query().Get("query")
+		if strings.Contains(q, "INSERT INTO contracts") {
+			return &http.Response{StatusCode: 500, Body: ioNopCloser("boom")}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: ioNopCloser("ok")}, nil
+	}))
+	if err := ing.processRange(context.Background(), 1, 1); err == nil || !strings.Contains(err.Error(), "inserting contracts") {
+		t.Fatalf("expected contracts insert error, got %v", err)
 	}
 }

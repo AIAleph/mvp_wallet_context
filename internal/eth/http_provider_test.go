@@ -1367,3 +1367,103 @@ func TestHTTPProvider_TransactionsStatusHexError(t *testing.T) {
 		t.Fatal("expected status hex parse error")
 	}
 }
+
+func TestNormalizeContractAddr(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		exp  string
+	}{
+		{"empty", " ", ""},
+		{"lower", "0xabc", "0xabc"},
+		{"upper", " 0xABCDEF ", "0xabcdef"},
+	}
+	for _, tc := range tests {
+		if got := normalizeContractAddr(tc.in); got != tc.exp {
+			t.Fatalf("%s: expected %q got %q", tc.name, tc.exp, got)
+		}
+	}
+}
+
+func TestHTTPProvider_CallBlockReceipts(t *testing.T) {
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "eth_getBlockReceipts" {
+			recs := []map[string]any{
+				{"transactionHash": "0xAAA", "gasUsed": "0x10", "status": "0x1", "contractAddress": " 0xABCD "},
+				{"transactionHash": "0xBBB", "gasUsed": "0x20", "status": "0x0", "contractAddress": "0xBEEF"},
+				{"transactionHash": "0xCCC", "gasUsed": "0x5"},
+			}
+			return mkResp(recs), nil
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := p.(*httpProvider).callBlockReceipts(context.Background(), 1, map[string]struct{}{"0xaaa": {}, "0xccc": {}})
+	if err != nil {
+		t.Fatalf("callBlockReceipts err: %v", err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("expected 2 receipts, got %d", len(recs))
+	}
+	first := recs["0xaaa"]
+	if first.contractAddress != "0xabcd" || first.status != 1 || first.gasUsed != 16 {
+		t.Fatalf("unexpected first receipt: %+v", first)
+	}
+	third := recs["0xccc"]
+	if third.contractAddress != "" || third.gasUsed != 5 {
+		t.Fatalf("unexpected third receipt: %+v", third)
+	}
+	if _, ok := recs["0xbbb"]; ok {
+		t.Fatalf("unexpected filtered receipt present")
+	}
+}
+
+func TestHTTPProvider_FetchReceiptsIndividuallyVariants(t *testing.T) {
+	responses := map[string]*http.Response{}
+	respFor := func(body any) *http.Response { return mkResp(body) }
+	responses["0xAAA"] = respFor(map[string]any{"status": "0x1", "gasUsed": "0x10", "contractAddress": "0xABCDEF"})
+	responses["0xBBB"] = respFor(map[string]any{"status": "bad", "gasUsed": "0x1"})
+	responses["0xCCC"] = respFor(map[string]any{"gasUsed": "0x2"})
+	client := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "eth_getTransactionReceipt" {
+			params := req["params"].([]any)
+			hash := params[0].(string)
+			if resp, ok := responses[hash]; ok {
+				return resp, nil
+			}
+		}
+		return mkResp(nil), nil
+	})}
+	p, err := NewHTTPProvider("http://unit-test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hp := p.(*httpProvider)
+	hp.receiptWorkers = 1
+	out, calls, failures, err := hp.fetchReceiptsIndividually(context.Background(), []string{"0xAAA", "0xBBB", "0xCCC"})
+	if err == nil {
+		t.Fatal("expected joined error")
+	}
+	if calls != 3 || failures != 1 {
+		t.Fatalf("unexpected calls/failures: %d/%d", calls, failures)
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected 2 receipts, got %d", len(out))
+	}
+	if rec := out["0xaaa"]; rec.contractAddress != "0xabcdef" || rec.status != 1 || rec.gasUsed != 16 {
+		t.Fatalf("normalized receipt mismatch: %+v", rec)
+	}
+	if rec := out["0xccc"]; rec.contractAddress != "" || rec.status != 1 || rec.gasUsed != 2 {
+		t.Fatalf("nil contract receipt mismatch: %+v", rec)
+	}
+	if res, calls, failures, err := hp.fetchReceiptsIndividually(context.Background(), nil); err != nil || len(res) != 0 || calls != 0 || failures != 0 {
+		t.Fatalf("empty input fast-path mismatch: res=%v calls=%d failures=%d err=%v", res, calls, failures, err)
+	}
+}

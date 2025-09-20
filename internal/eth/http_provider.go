@@ -47,8 +47,9 @@ const (
 )
 
 type receiptLite struct {
-	gasUsed uint64
-	status  uint8
+	gasUsed         uint64
+	status          uint8
+	contractAddress string
 }
 
 // NewHTTPProvider constructs a JSON-RPC provider using the given http.Client (or a default one if nil).
@@ -371,11 +372,15 @@ func (p *httpProvider) TraceBlock(ctx context.Context, from, to uint64, address 
 			TxHash       string `json:"transactionHash"`
 			BlockHex     string `json:"blockNumber"`
 			TraceAddress []int  `json:"traceAddress"`
+			Type         string `json:"type"`
 			Action       struct {
 				From  string `json:"from"`
 				To    string `json:"to"`
 				Value string `json:"value"`
 			} `json:"action"`
+			Result struct {
+				Address string `json:"address"`
+			} `json:"result"`
 		}
 		if err := p.call(ctx, "trace_filter", params, &raw); err != nil {
 			if strings.Contains(err.Error(), "rpc -32601") || strings.Contains(err.Error(), "trace_filter") {
@@ -401,14 +406,18 @@ func (p *httpProvider) TraceBlock(ctx context.Context, from, to uint64, address 
 				}
 				traceID = string(buf)
 			}
+			typeLower := strings.ToLower(strings.TrimSpace(t.Type))
+			created := normalizeContractAddr(t.Result.Address)
 			all = append(all, Trace{
-				TxHash:   t.TxHash,
-				TraceID:  traceID,
-				From:     t.Action.From,
-				To:       t.Action.To,
-				ValueWei: t.Action.Value,
-				BlockNum: blk,
-				TsMillis: 0, // optional enrichment later
+				TxHash:          t.TxHash,
+				TraceID:         traceID,
+				From:            t.Action.From,
+				To:              t.Action.To,
+				ValueWei:        t.Action.Value,
+				BlockNum:        blk,
+				TsMillis:        0, // optional enrichment later
+				Type:            typeLower,
+				CreatedContract: created,
 			})
 		}
 		if len(raw) < page {
@@ -582,15 +591,16 @@ func (p *httpProvider) Transactions(ctx context.Context, address string, from, t
 				continue
 			}
 			result = append(result, Transaction{
-				Hash:     tx.hash,
-				From:     tx.from,
-				To:       tx.to,
-				ValueWei: tx.value,
-				InputHex: tx.input,
-				GasUsed:  rec.gasUsed,
-				Status:   rec.status,
-				BlockNum: tx.blockNum,
-				TsMillis: tx.tsMillis,
+				Hash:            tx.hash,
+				From:            tx.from,
+				To:              tx.to,
+				ValueWei:        tx.value,
+				InputHex:        tx.input,
+				GasUsed:         rec.gasUsed,
+				Status:          rec.status,
+				BlockNum:        tx.blockNum,
+				TsMillis:        tx.tsMillis,
+				ContractAddress: rec.contractAddress,
 			})
 		}
 		if blk == math.MaxUint64 {
@@ -605,6 +615,14 @@ func (p *httpProvider) Transactions(ctx context.Context, address string, from, t
 		partialErr = errors.Join(partialErrs...)
 	}
 	return result, nil
+}
+
+func normalizeContractAddr(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	return strings.ToLower(addr)
 }
 
 func (p *httpProvider) fetchReceiptsForBlock(ctx context.Context, block uint64, hashes []string) (map[string]receiptLite, int, int, error) {
@@ -695,8 +713,9 @@ func (p *httpProvider) fetchReceiptsIndividually(ctx context.Context, hashes []s
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			var receipt struct {
-				Status  string `json:"status"`
-				GasUsed string `json:"gasUsed"`
+				Status          string  `json:"status"`
+				GasUsed         string  `json:"gasUsed"`
+				ContractAddress *string `json:"contractAddress"`
 			}
 			if callErr := p.call(ctx, "eth_getTransactionReceipt", []interface{}{hash}, &receipt); callErr != nil {
 				resCh <- result{err: fmt.Errorf("receipt %s: %w", hash, callErr)}
@@ -717,7 +736,11 @@ func (p *httpProvider) fetchReceiptsIndividually(ctx context.Context, hashes []s
 				statusVal = uint8(s)
 			}
 			hashLower := strings.ToLower(hash)
-			resCh <- result{hashLower: hashLower, receipt: receiptLite{gasUsed: gasUsed, status: statusVal}}
+			contractAddr := ""
+			if receipt.ContractAddress != nil {
+				contractAddr = normalizeContractAddr(*receipt.ContractAddress)
+			}
+			resCh <- result{hashLower: hashLower, receipt: receiptLite{gasUsed: gasUsed, status: statusVal, contractAddress: contractAddr}}
 		}()
 	}
 	wg.Wait()
@@ -741,9 +764,10 @@ func (p *httpProvider) fetchReceiptsIndividually(ctx context.Context, hashes []s
 
 func (p *httpProvider) callBlockReceipts(ctx context.Context, block uint64, filter map[string]struct{}) (map[string]receiptLite, error) {
 	var recs []struct {
-		TxHash  string `json:"transactionHash"`
-		Status  string `json:"status"`
-		GasUsed string `json:"gasUsed"`
+		TxHash          string  `json:"transactionHash"`
+		Status          string  `json:"status"`
+		GasUsed         string  `json:"gasUsed"`
+		ContractAddress *string `json:"contractAddress"`
 	}
 	if err := p.call(ctx, "eth_getBlockReceipts", []interface{}{toHex(block)}, &recs); err != nil {
 		return nil, err
@@ -768,7 +792,11 @@ func (p *httpProvider) callBlockReceipts(ctx context.Context, block uint64, filt
 			}
 			statusVal = uint8(s)
 		}
-		out[hashLower] = receiptLite{gasUsed: gasUsed, status: statusVal}
+		contractAddr := ""
+		if rec.ContractAddress != nil {
+			contractAddr = normalizeContractAddr(*rec.ContractAddress)
+		}
+		out[hashLower] = receiptLite{gasUsed: gasUsed, status: statusVal, contractAddress: contractAddr}
 	}
 	return out, nil
 }
