@@ -81,4 +81,7 @@ func TestBackfillDeltaAndTsCache(t *testing.T) {
 	if err := ing.Delta(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if p.tsCalls <= callsAfterBackfill {
+		t.Fatalf("expected timestamp cache eviction; calls=%d after delta (was %d)", p.tsCalls, callsAfterBackfill)
+	}
 }
